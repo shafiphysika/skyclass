@@ -1,0 +1,78 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const C = require('../core.js');
+
+test('parseNames trims, numbers, dedupes case-insensitively', () => {
+  assert.deepEqual(C.parseNames('1. Ali\n2) Sara, ali ;  \nZoya'), ['Ali', 'Sara', 'Zoya']);
+});
+
+test('award never drops below zero and logs the real change', () => {
+  const c = C.newClass('6A', ['Ali']); const id = c.students[0].id;
+  assert.equal(C.award(c, id, 2, 'Bright idea'), 2);
+  assert.equal(C.award(c, id, -5, 'oops'), -2);
+  assert.equal(c.students[0].points, 0);
+  assert.equal(C.award(c, id, -1, 'again'), 0);
+  assert.equal(c.students[0].log.length, 2);
+});
+
+test('fair wheel picks everyone once before repeating', () => {
+  const pool = ['a', 'b', 'c']; let used = [], seen = [];
+  for (let i = 0; i < 3; i++) { const r = C.pickFair(pool, used); used = r.used; seen.push(r.pick); }
+  assert.deepEqual(seen.sort(), pool);
+  const r = C.pickFair(pool, used); assert.equal(r.used.length, 1);
+  assert.equal(C.pickFair([], []).pick, null);
+});
+
+test('groups are balanced and keep every member', () => {
+  const g = C.makeGroups(['a', 'b', 'c', 'd', 'e'], 2);
+  assert.deepEqual(g.map(x => x.length).sort(), [2, 3]);
+  assert.equal(g.flat().length, 5);
+});
+
+test('attendance: late counts as present, no records is null not 0', () => {
+  const c = C.newClass('x', ['A']); const id = c.students[0].id;
+  assert.equal(C.attendanceRate(c, id), null);
+  c.attendance['2026-11-10'] = { [id]: 'p' }; c.attendance['2026-11-11'] = { [id]: 'a' }; c.attendance['2026-11-12'] = { [id]: 'l' };
+  assert.equal(C.attendanceRate(c, id), 67);
+});
+
+test('ClassGrove import maps seat numbers to roster positions', () => {
+  const store = { roster: { '601': { names: ['Ali', '', 'Sara'] } }, classes: { '601': { pts: { 1: 12, 3: 7 }, goal: 500, reward: 'Picnic' } } };
+  const [c] = C.fromClassGrove(store, 'My first school');
+  assert.equal(c.name, 'My first school · 601');
+  assert.deepEqual(c.students.map(s => [s.name, s.points]), [['Ali', 12], ['Sara', 7]]);
+  assert.deepEqual(c.goal, { target: 500, reward: 'Picnic' });
+});
+
+test('normalize rejects junk and clamps hostile input', () => {
+  const s = C.normalize({ classes: [{ name: 'x'.repeat(500), students: [{ name: '<b>Al</b>', points: -9 }, { name: '' }], attendance: { bad: {}, '2026-01-01': { nope: 'p' } } }], activeClass: 'ghost' });
+  assert.equal(s.classes[0].name.length, 40);
+  assert.equal(s.classes[0].students.length, 1);
+  assert.equal(s.classes[0].students[0].points, 0);
+  assert.deepEqual(s.classes[0].attendance, { '2026-01-01': {} });
+  assert.equal(s.activeClass, s.classes[0].id);
+  assert.equal(C.normalize(null).classes.length, 0);
+});
+
+test('lesson quick-write parses slide types and answers', () => {
+  const l = C.parseLessonText('T', 'S', '🌍 Earth\nOur home\n\n? Pick\n- a\n* b\n\nT/F Sky is green\n= false\n\n% Vote\n- x\n- y');
+  assert.deepEqual(l.slides.map(s => s.type), ['info', 'mcq', 'tf', 'poll']);
+  assert.equal(l.slides[0].emoji, '🌍');
+  assert.equal(C.parseLessonText('t', '', '☀️ Sun\nhot').slides[0].title, 'Sun');
+  assert.equal(l.slides[1].answer, 1);
+  assert.equal(l.slides[2].answer, 1);
+  assert.deepEqual(C.scoreQuiz(l.slides, { 1: 1, 2: 0 }), { right: 1, total: 2, percent: 50 });
+  assert.equal(C.parseLessonText('x', '', '   '), null);
+});
+
+test('sample lessons ship and badges step up', () => {
+  assert.equal(C.emptyState().lessons.length, 2);
+  assert.equal(C.badgesFor(30).length, 2);
+  assert.equal(C.nextBadge(30).at, 50);
+});
+
+test('links keep https only', () => {
+  assert.equal(C.cleanLink({ url: 'javascript:alert(1)' }), null);
+  assert.equal(C.cleanLink({ url: 'http://x.com' }), null);
+  assert.equal(C.cleanLink({ url: 'kahoot.com', title: 'K' }).url, 'https://kahoot.com/');
+});

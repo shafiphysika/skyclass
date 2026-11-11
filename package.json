@@ -1,0 +1,1 @@
+{"name":"skyclass","private":true,"scripts":{"test":"node --test tests/core.test.cjs","start":"python -m http.server 8766 --bind 127.0.0.1"}}
