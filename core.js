@@ -38,7 +38,7 @@
     id: uid(), name: clip(name, 40) || 'My class', students: names.map(n => newStudent(n)),
     attendance: {}, posts: [], goal: { target: 300, reward: 'Game time' },
   });
-  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], activeClass: null });
+  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], lib: { repo: '', branch: 'main', items: [] }, activeClass: null });
 
   // Trust boundary: anything loaded from storage or an imported file goes through here.
   function normalize(raw) {
@@ -69,6 +69,7 @@
     });
     if (Array.isArray(raw.lessons)) s.lessons = raw.lessons.slice(0, 200).map(normalizeLesson).filter(Boolean);
     s.links = (Array.isArray(raw.links) ? raw.links : []).slice(0, 60).map(cleanLink).filter(Boolean);
+    s.lib = cleanLib(raw.lib);
     s.activeClass = s.classes.some(c => c.id === raw.activeClass) ? raw.activeClass : (s.classes[0] ? s.classes[0].id : null);
     return s;
   }
@@ -77,6 +78,42 @@
   function cleanLink(l) {
     let url = clip(l && l.url, 300); if (url && !/^[a-z]+:/i.test(url)) url = 'https://' + url;
     try { const u = new URL(url); if (u.protocol !== 'https:') return null; return { id: typeof l.id === 'string' ? clip(l.id, 40) : uid(), title: clip(l.title, 50) || u.hostname, url: u.href }; } catch { return null; }
+  }
+
+  /* Library: files listed from a public GitHub repository. */
+  const EXT = { pptx: 'slides', ppt: 'slides', ppsx: 'slides', pps: 'slides', pdf: 'doc', docx: 'doc', doc: 'doc', xlsx: 'doc', html: 'game', htm: 'game', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', mp4: 'video', webm: 'video' };
+  const KINDS = ['slides', 'doc', 'game', 'image', 'video'];
+  function cleanRepo(v) {
+    const m = String(v || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/, '').replace(/\/+$/, '').match(/^([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100})$/);
+    return m ? m[1] + '/' + m[2] : '';
+  }
+  const nice = s => s.replace(/[-_]+/g, ' ').trim();
+  // GitHub tree -> library items. A folder with index.html is one game; its other files are hidden as parts of it.
+  function libraryFromTree(tree) {
+    const blobs = (Array.isArray(tree) ? tree : []).filter(t => t && t.type === 'blob' && typeof t.path === 'string' && !/(^|\/)(\.|node_modules\/)/.test(t.path));
+    const dirOf = p => p.split('/').slice(0, -1).join('/'), isIndex = p => /(^|\/)index\.html?$/i.test(p);
+    const gameDirs = new Set(blobs.filter(t => isIndex(t.path) && dirOf(t.path)).map(t => dirOf(t.path)));
+    const topGame = p => { const parts = dirOf(p).split('/'); for (let i = 1; i <= parts.length; i++) { const d = parts.slice(0, i).join('/'); if (gameDirs.has(d)) return d; } return null; };
+    return blobs.map(t => {
+      const parts = t.path.split('/'), file = parts[parts.length - 1], m = file.match(/^(.*)\.([a-z0-9]+)$/i), kind = m && EXT[m[2].toLowerCase()], game = topGame(t.path);
+      if (!kind) return null;
+      if (game !== null) return isIndex(t.path) && dirOf(t.path) === game ? { path: t.path, kind: 'game', title: nice(parts[parts.length - 2]), group: parts.length > 2 ? nice(parts[0]) : 'Games', size: 0 } : null;
+      return { path: t.path, kind, title: nice(m[1]), group: parts.length > 1 ? nice(parts[0]) : 'General', size: int(t.size, 0, 1e10, 0) };
+    }).filter(Boolean).slice(0, 400);
+  }
+  function cleanLib(l) {
+    l = l && typeof l === 'object' ? l : {};
+    const repo = cleanRepo(l && l.repo), branch = /^[\w.\/-]{1,100}$/.test(l && l.branch) ? l.branch : 'main';
+    const items = !repo ? [] : (Array.isArray(l.items) ? l.items : []).slice(0, 400).map(it => {
+      const path = String((it && it.path) || '');
+      if (!path || path.length > 300 || /(^|\/)\.\.(\/|$)/.test(path) || !KINDS.includes(it.kind)) return null;
+      return { path, kind: it.kind, title: clip(it.title, 80) || path, group: clip(it.group, 40) || 'General', size: int(it.size, 0, 1e10, 0) };
+    }).filter(Boolean);
+    return { repo, branch, items };
+  }
+  function libUrl(repo, branch, item) {
+    const p = item.path.split('/').map(encodeURIComponent).join('/'), [o, r] = repo.split('/'), raw = `https://raw.githubusercontent.com/${repo}/${branch}/${p}`;
+    return { raw, page: `https://github.com/${repo}/blob/${branch}/${p}`, site: `https://${o.toLowerCase()}.github.io/${r}/${p}`, office: 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(raw) };
   }
 
   const SLIDE_TYPES = ['info', 'mcq', 'poll', 'tf'];
@@ -182,6 +219,6 @@
     ].filter(Boolean);
   }
 
-  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
+  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, libUrl, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.SkyCore = api;
 })(this);

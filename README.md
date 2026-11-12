@@ -6,6 +6,11 @@ A classroom site with three views: teacher, student and parent.
 - **Student:** my stars, badges, why I got each star, lessons to play, homework.
 - **Parent:** my child's stars, attendance, recent activity, homework and news. Read-only.
 
+## Games and library
+
+- **Games:** five built-in games for students (maths sprint, memory match, word scramble, colour echo, star catcher). Best scores stay on the device.
+- **Library:** put PowerPoints, PDFs, pictures and HTML games in a public GitHub repository, one folder per subject. In **Library**, enter `owner/name` and press **Sync from GitHub**. Slides open in Microsoft's online viewer (files up to 10 MB; the file address is sent to Microsoft), a folder with `index.html` opens as a game (the repository needs GitHub Pages turned on), and PDFs open on GitHub. Families with a code see the same library.
+
 ## Run it
 
 No build step. Serve the folder and open it:

@@ -14,6 +14,7 @@ const school = {
     posts: [{ id: 'p1', kind: 'news', text: 'Trip on Friday', t: 1 }],
   }],
   lessons: [{ id: 'l1', title: 'Water', slides: [{ type: 'info', title: 'Rain' }] }],
+  lib: { repo: 'a/b', branch: 'main', items: [{ path: 'x.pptx', kind: 'slides' }] },
 };
 
 test('teachers are isolated, saves are revision-checked, family codes show one child only', async () => {
@@ -56,6 +57,7 @@ test('teachers are isolated, saves are revision-checked, family codes show one c
     assert.deepEqual(v.class.attendance, { '2026-11-10': { s1: 'p' } });
     assert.equal(v.class.posts.length, 1);
     assert.equal(v.lessons.length, 1);
+    assert.equal(v.lib.items[0].path, 'x.pptx');
     assert.ok(!JSON.stringify(v).includes('Sara'), 'no other child leaks');
     assert.ok(!('students' in v.class));
 

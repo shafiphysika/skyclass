@@ -8,7 +8,8 @@
   let state, ui = { role: null, tab: 'board', who: null, skill: 'help' };
   try { state = C.normalize(JSON.parse(localStorage.getItem(KEY))); } catch { state = C.emptyState(); }
   try { Object.assign(ui, JSON.parse(localStorage.getItem(UIKEY)) || {}); } catch { /* first visit */ }
-  let last = null, wheelUsed = {}, wheelRot = 0, wheelPick = null, player = null;
+  let last = null, wheelUsed = {}, wheelRot = 0, wheelPick = null, player = null, stopGame = null;
+  const wonAt = {}; // class id -> goal already reached, so the party plays once
   const timer = { left: 300, total: 300, end: 0, tick: null };
 
   // Online mode is optional: without config.js values (or if the library fails to load) everything stays on this device.
@@ -43,8 +44,19 @@
       s.addEventListener('animationend', () => s.remove()); fx.appendChild(s);
     }
   }
+  function party() {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    for (let i = 0; i < 44; i++) {
+      const s = document.createElement('span');
+      s.textContent = '🎉⭐🎈✨🌈'.match(/\p{Extended_Pictographic}/gu)[i % 5]; s.className = 'confetti';
+      s.style.left = Math.random() * 100 + 'vw'; s.style.animationDelay = Math.random() * .9 + 's'; s.style.fontSize = 1.2 + Math.random() * 1.6 + 'rem';
+      s.addEventListener('animationend', () => s.remove()); fx.appendChild(s);
+    }
+  }
+  function enterAnim() { app.classList.remove('enter'); void app.offsetWidth; app.classList.add('enter'); }
+  function endGame() { if (stopGame) { stopGame(); stopGame = null; } }
   function openDlg(html, kind = '') { dlg.className = kind; dlg.innerHTML = html; if (!dlg.open) dlg.showModal(); }
-  function closeDlg() { if (dlg.open) dlg.close(); player = null; }
+  function closeDlg() { endGame(); if (dlg.open) dlg.close(); player = null; }
 
   /* ---------- shared pieces ---------- */
   const CLOUDS = '<i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i>';
@@ -56,8 +68,8 @@
       : `<h2>${g.target - total} stars to ${esc(g.reward)}</h2><p>${esc(c.name)} has ${total} of ${g.target} stars. Every star lifts the kite.</p>`;
   }
   function skyHTML(c, canEdit) {
-    const lift = Math.min(1, C.classTotal(c) / c.goal.target);
-    return `<section class="sky" id="sky" style="--lift:${lift}">${CLOUDS}
+    const lift = Math.min(1, C.classTotal(c) / c.goal.target); wonAt[c.id] = lift >= 1;
+    return `<section class="sky${lift >= 1 ? ' won' : ''}" id="sky" style="--lift:${lift}">${CLOUDS}<i class="rainbow"></i>
       <svg class="string" viewBox="0 0 100 100" preserveAspectRatio="none"><path id="kstring" d="${stringPath(lift)}"/></svg>
       <div class="kite">${KITE}</div><div class="skytext" id="skytext">${skyText(c)}</div>
       ${canEdit ? '<button class="pill" data-act="goal">Change goal</button>' : ''}</section>`;
@@ -65,7 +77,7 @@
   function refreshSky(c) {
     const sky = $('#sky'); if (!sky) return;
     const lift = Math.min(1, C.classTotal(c) / c.goal.target);
-    sky.style.setProperty('--lift', lift); $('#kstring').setAttribute('d', stringPath(lift)); $('#skytext').innerHTML = skyText(c);
+    sky.style.setProperty('--lift', lift); sky.classList.toggle('won', lift >= 1); $('#kstring').setAttribute('d', stringPath(lift)); $('#skytext').innerHTML = skyText(c);
   }
   const postsHTML = (c, canDelete) => c.posts.length ? c.posts.slice().reverse().map(p => `<article class="post ${p.kind}">
       <span class="tag">${p.kind === 'homework' ? '📝 Homework' : '📣 News'}</span>
@@ -77,8 +89,8 @@
 
   /* ---------- chrome ---------- */
   const TABS = {
-    teacher: [['board', '⭐', 'Points'], ['attend', '✅', 'Attendance'], ['lessons', '📖', 'Lessons'], ['tools', '🎡', 'Tools'], ['sites', '🧭', 'Fun sites'], ['news', '📣', 'News'], ['setup', '⚙️', 'Classes']],
-    student: [['me', '🌟', 'My stars'], ['lessons', '📖', 'Lessons'], ['news', '📝', 'Homework']],
+    teacher: [['board', '⭐', 'Points'], ['attend', '✅', 'Attendance'], ['lessons', '📖', 'Lessons'], ['tools', '🎡', 'Tools'], ['games', '🎮', 'Games'], ['library', '📚', 'Library'], ['sites', '🧭', 'Fun sites'], ['news', '📣', 'News'], ['setup', '⚙️', 'Classes']],
+    student: [['me', '🌟', 'My stars'], ['games', '🎮', 'Games'], ['lessons', '📖', 'Lessons'], ['library', '📚', 'Library'], ['news', '📝', 'Homework']],
     parent: [],
   };
   function render() {
@@ -94,7 +106,8 @@
   function homeHTML() {
     return `<section class="hero sky" style="--lift:.95">${CLOUDS}
       <svg class="string" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="${stringPath(.95)}"/></svg><div class="kite">${KITE}</div>
-      <div class="herotext"><h1>Skyclass</h1><p>Stars, lessons and classroom games for the whole school day. Who is here?</p></div>
+      <i class="sun"></i><span class="balloon b1">🎈</span><span class="balloon b2">🎈</span><span class="balloon b3">🎈</span><i class="hill h1"></i><i class="hill h2"></i>
+      <div class="herotext"><h1 aria-label="Skyclass">${[...'Skyclass'].map((ch, i) => `<span style="--i:${i}">${ch}</span>`).join('')}</h1><p>Stars, lessons and classroom games for the whole school day. Who is here?</p></div>
       <div class="doors">
         <button data-act="enter" data-role="teacher"><span>🧑‍🏫</span><b>Teacher</b><small>Run the class</small></button>
         <button data-act="enter" data-role="student"><span>🎒</span><b>Student</b><small>See my stars and play lessons</small></button>
@@ -105,8 +118,10 @@
   /* ---------- teacher ---------- */
   function teacherHTML() {
     const c = cls();
-    if (ui.tab === 'setup' || (!c && ui.tab !== 'sites' && ui.tab !== 'lessons')) return setupHTML(c);
+    if (ui.tab === 'setup' || (!c && !['sites', 'lessons', 'games', 'library'].includes(ui.tab))) return setupHTML(c);
     if (ui.tab === 'sites') return sitesHTML();
+    if (ui.tab === 'games') return gamesHTML();
+    if (ui.tab === 'library') return libraryHTML(true);
     if (ui.tab === 'lessons') return lessonsHTML(true);
     if (!c.students.length) return `<p class="empty">${esc(c.name)} has no students yet. <button class="pill" data-act="tab" data-tab="setup">Add students</button></p>`;
     if (ui.tab === 'board') return boardHTML(c);
@@ -123,7 +138,7 @@
     return `${skyHTML(c, true)}
       <div class="skills" role="group" aria-label="Reason for the star">${C.SKILLS.map(s => `<button data-act="skill" data-id="${s.id}" aria-pressed="${s.id === skill.id}">${s.icon} ${s.label} <b>+${s.points}</b></button>`).join('')}</div>
       <div class="bar"><p>Tap a student to give <b>${skill.icon} ${skill.label}</b>.</p><button class="pill" data-act="giveall">Whole class +1</button><button class="pill" data-act="undo" ${last ? '' : 'disabled'}>Undo</button></div>
-      <div class="cards">${c.students.map(s => `<div class="card" data-sid="${esc(s.id)}">
+      <div class="cards">${c.students.map((s, i) => `<div class="card" style="--h:${hash(s.id) % 360};--i:${i}" data-sid="${esc(s.id)}">
         <button class="give" data-act="give" data-sid="${esc(s.id)}" aria-label="Give ${esc(s.name)} a star">${avatar(s)}<span class="nm">${esc(s.name)}</span><span class="pts">${s.points}</span></button>
         <button class="minus" data-act="take" data-sid="${esc(s.id)}" aria-label="Take 1 star from ${esc(s.name)}">−</button></div>`).join('')}</div>`;
   }
@@ -160,6 +175,33 @@
     const seg = pool.map((s, i) => `${n === 1 ? '<circle cx="100" cy="100" r="96"' : `<path d="M100,100 L${pt(i * a)} A96,96 0 0 1 ${pt((i + 1) * a)}Z"`} fill="hsl(${(i * 47 + 200) % 360} 85% ${i % 2 ? 68 : 60}%)"/>
       <text x="188" y="100" text-anchor="end" dominant-baseline="middle" font-size="${fs}" transform="rotate(${(i + .5) * a - 90} 100 100)">${esc(s.name.slice(0, 14))}</text>`).join('');
     return `<div class="wheelwrap"><i class="pointer"></i><svg id="wheel" class="wheel" viewBox="0 0 200 200" style="transform:rotate(${wheelRot}deg)" data-act="spin" role="img" aria-label="Name wheel">${seg}<circle cx="100" cy="100" r="12" fill="#fff" stroke="#1b2a5c" stroke-width="3"/></svg></div>`;
+  }
+  function gamesHTML() {
+    const best = SkyGames.best();
+    return `<h2 class="h">Games</h2><p class="lead">Quick brain games. Best scores are kept on this device.</p>
+      <div class="lessons">${SkyGames.list.map((g, i) => `<article class="lesson game" style="--h:${g.hue};--i:${i}"><span class="big">${g.icon}</span><h3>${g.title}</h3><p>${g.blurb}</p>
+        <p class="best">${best[g.id] != null ? `Best: ${esc(best[g.id])} ${g.unit}` : 'Not played yet'}</p><button class="btn" data-act="game" data-id="${g.id}">Play</button></article>`).join('')}</div>`;
+  }
+  const LIB = { slides: ['📽️', 'Slides'], doc: ['📄', 'Document'], game: ['🎮', 'Game'], image: ['🖼️', 'Picture'], video: ['🎬', 'Video'] };
+  function libraryHTML(teacher) {
+    const lib = S().lib, groups = {};
+    lib.items.forEach(it => (groups[it.group] = groups[it.group] || []).push(it));
+    const setup = teacher ? `<form class="panel form" data-form="librepo"><label class="wide">GitHub repository that holds your slides and games<input name="repo" value="${esc(lib.repo)}" placeholder="yourname/skyclass-library" required></label><button class="btn">Sync from GitHub</button>
+      <p class="hint wide">Put PowerPoints, PDFs, pictures and HTML games in a public GitHub repository, one folder per subject, then sync. Sync again after adding files. Everyone can see a public repository, so keep student details out of it.</p></form>` : '';
+    return `<h2 class="h">Library</h2>${setup}${Object.keys(groups).sort().map(g => `<section class="sitegroup"><h3>${esc(g)}</h3><div class="sites">${groups[g].map(it => `<button class="site libitem" data-act="libopen" data-path="${esc(it.path)}"><b>${LIB[it.kind][0]} ${esc(it.title)}</b><small>${LIB[it.kind][1]}${it.size ? ', ' + (it.size / 1e6).toFixed(1) + ' MB' : ''}</small></button>`).join('')}</div></section>`).join('')
+      || `<p class="empty">${teacher ? 'No files yet. Enter your repository above and sync.' : 'Your teacher has not added any files yet.'}</p>`}`;
+  }
+  async function libSync(text) {
+    const repo = C.cleanRepo(text); if (!repo) return toast('Write the repository as owner/name, for example yourname/skyclass-library.');
+    try {
+      const info = await fetch(`https://api.github.com/repos/${repo}`);
+      if (info.status === 404) return toast('That repository was not found. It has to be public.');
+      if (!info.ok) throw new Error('github');
+      const branch = (await info.json()).default_branch, tree = await fetch(`https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+      if (!tree.ok) throw new Error('github');
+      state.lib = { repo, branch, items: C.libraryFromTree((await tree.json()).tree) }; state = C.normalize(state); save(); render();
+      toast(`Library synced: ${state.lib.items.length} file${state.lib.items.length === 1 ? '' : 's'}.`);
+    } catch { toast('GitHub could not be reached just now. Try again in a few minutes.'); }
   }
   function sitesHTML() {
     return `<h2 class="h">Fun sites, one tap away</h2><p class="lead">Each one opens in a new tab so your class stays here.</p>
@@ -206,6 +248,8 @@
     const c = cls(), s = student();
     if (!s) return whoHTML('Tap your name');
     if (ui.tab === 'lessons') return lessonsHTML(false);
+    if (ui.tab === 'games') return gamesHTML();
+    if (ui.tab === 'library') return libraryHTML(false);
     if (ui.tab === 'news') return `<h2 class="h">Homework and news</h2><div class="posts">${postsHTML(c, false)}</div>`;
     const next = C.nextBadge(s.points), prev = C.badgesFor(s.points).pop(), base = prev ? prev.at : 0;
     return `<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
@@ -284,9 +328,24 @@
     return d;
   }
   const acts = {
-    home() { ui.role = null; render(); },
-    enter(b) { ui.role = b.dataset.role; ui.tab = TABS[ui.role][0] ? TABS[ui.role][0][0] : ''; if (ui.role !== 'teacher') { ui.who = null; if (sb && ui.code) openFamily(ui.code, true); } if (!cls() && state.classes[0]) state.activeClass = state.classes[0].id; save(); render(); },
-    tab(b) { ui.tab = b.dataset.tab; save(); render(); scrollTo(0, 0); },
+    home() { ui.role = null; render(); enterAnim(); },
+    enter(b) { ui.role = b.dataset.role; ui.tab = TABS[ui.role][0] ? TABS[ui.role][0][0] : ''; if (ui.role !== 'teacher') { ui.who = null; if (sb && ui.code) openFamily(ui.code, true); } if (!cls() && state.classes[0]) state.activeClass = state.classes[0].id; save(); render(); enterAnim(); },
+    tab(b) { ui.tab = b.dataset.tab; save(); render(); enterAnim(); scrollTo(0, 0); },
+    game(b) {
+      const g = SkyGames.list.find(x => x.id === b.dataset.id); if (!g) return;
+      openDlg(`<div class="phead"><span>${g.icon} ${g.title}</span><button class="pill" data-act="closedlg">Close</button></div><div id="game" class="gamebox"></div><span></span>`, 'player');
+      stopGame = SkyGames.start(g.id, $('#game'));
+    },
+    libopen(b) {
+      const lib = S().lib, it = lib.items.find(x => x.path === b.dataset.path); if (!it) return;
+      const u = C.libUrl(lib.repo, lib.branch, it), t = esc(it.title);
+      const view = it.kind === 'slides' ? (it.size > 10e6 ? '<div class="slide"><span class="big">📽️</span><h2>Too big to preview</h2><p>Slide files over 10 MB cannot be shown here. Download it and open it in PowerPoint.</p></div>' : `<iframe class="viewer" src="${esc(u.office)}" title="${t}" allowfullscreen></iframe>`)
+        : it.kind === 'game' ? `<iframe class="viewer" src="${esc(u.site)}" title="${t}" sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock" allow="fullscreen"></iframe>`
+        : it.kind === 'image' ? `<img class="viewer" src="${esc(u.raw)}" alt="${t}">`
+        : it.kind === 'video' ? `<video class="viewer" src="${esc(u.site)}" controls></video>` : '';
+      if (!view) return window.open(u.page, '_blank', 'noopener');
+      openDlg(`<div class="phead"><span>${t}</span><span><a class="pill" href="${esc(it.kind === 'game' ? u.site : u.raw)}" target="_blank" rel="noopener noreferrer">${it.kind === 'game' ? 'Open in new tab' : 'Download'}</a> <button class="pill" data-act="closedlg">Close</button></span></div>${view}<span></span>`, 'player');
+    },
     skill(b) { ui.skill = b.dataset.id; save(); render(); },
     give(b) { const c = cls(), sk = C.SKILLS.find(s => s.id === ui.skill) || C.SKILLS[0], d = give(c, b.dataset.sid, sk.points, sk.label, b); if (d) { last = [[b.dataset.sid, d]]; afterAward(c); } },
     take(b) { const c = cls(), d = give(c, b.dataset.sid, -1, 'Point removed'); if (d) { last = [[b.dataset.sid, d]]; afterAward(c); } },
@@ -392,11 +451,11 @@
   async function openFamily(code, quiet, keep = true) {
     const { data, error } = await sb.rpc('sky_family_view', { p_code: code });
     if (error) { if (!quiet) toast('Could not reach the class. Check your connection and try again.'); return; }
-    if (data) fam = C.normalize({ classes: [{ ...data.class, students: [data.student] }], lessons: data.lessons });
+    if (data) fam = C.normalize({ classes: [{ ...data.class, students: [data.student] }], lessons: data.lessons, lib: data.lib });
     if (!data || !fam.classes[0] || !fam.classes[0].students[0]) { ui.code = null; fam = null; saveLocal(); render(); return toast('That code did not work. Check it with your teacher.'); }
     fam.classes[0].total = data.class.total; ui.code = keep ? code : null; saveLocal(); render();
   }
-  function afterAward(c) { save(); refreshSky(c); const u = app.querySelector('[data-act="undo"]'); if (u) u.disabled = !last; }
+  function afterAward(c) { const won = C.classTotal(c) >= c.goal.target; if (won && !wonAt[c.id]) { party(); toast(`Goal reached: ${c.goal.reward}!`); } wonAt[c.id] = won; save(); refreshSky(c); const u = app.querySelector('[data-act="undo"]'); if (u) u.disabled = !last; }
 
   const forms = {
     post(f) { const c = cls(); c.posts.push({ id: C.uid(), kind: f.kind.value, text: f.text.value, due: f.kind.value === 'homework' ? f.due.value : '', t: Date.now() }); state = C.normalize(state); toast('Posted.'); },
@@ -407,6 +466,7 @@
     addstudents(f) { const c = cls(), have = new Set(c.students.map(s => s.name.toLowerCase())), names = C.parseNames(f.names.value).filter(n => !have.has(n.toLowerCase())); if (!names.length) return toast('Type at least one new name.'), false; c.students.push(...names.map(n => C.newStudent(n))); toast(`Added ${names.length} student${names.length === 1 ? '' : 's'}.`); },
     newclass(f) { const c = C.newClass(f.name.value, C.parseNames(f.names.value)); state.classes.push(c); state.activeClass = c.id; if (c.students.length) ui.tab = 'board'; toast(`${c.name} created.`); },
     signin(f) { signIn(f, false); return false; },
+    librepo(f) { libSync(f.repo.value); return false; },
     famcode(f) { openFamily(f.code.value.trim().toUpperCase(), false, f.keep.checked); return false; },
     groups(f) { const c = cls(), g = C.makeGroups(wheelPool(c).map(s => s.name), +f.n.value); $('#groupsout').innerHTML = g.map((m, i) => `<div style="--h:${i * 55 % 360}"><b>Group ${i + 1}</b>${m.map(esc).join('<br>')}</div>`).join(''); return false; },
   };
@@ -415,7 +475,7 @@
   document.addEventListener('submit', e => { const f = e.target, h = forms[f.dataset.form]; if (!h) return; e.preventDefault(); if (h(f) !== false) { save(); render(); } });
   document.addEventListener('change', e => { if (e.target.dataset.change === 'class') { state.activeClass = e.target.value; ui.who = ui.role === 'teacher' ? ui.who : null; last = null; save(); render(); } });
   document.addEventListener('keydown', e => { if (!player || e.target.closest('input,textarea')) return; if (e.key === 'ArrowRight' && player.i < player.lesson.slides.length) acts.pnext(); if (e.key === 'ArrowLeft') acts.pprev(); });
-  dlg.addEventListener('close', () => { player = null; });
+  dlg.addEventListener('close', () => { endGame(); player = null; });
   dlg.addEventListener('click', e => { if (e.target === dlg && !dlg.classList.contains('player')) closeDlg(); });
   render();
   if (sb) {

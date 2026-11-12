@@ -72,7 +72,8 @@ begin
       'posts', coalesce(cls->'posts', '[]'::jsonb), 'attendance', att,
       'total', (select coalesce(sum(greatest(0, (s->>'points')::numeric)), 0) from jsonb_array_elements(cls->'students') s)),
     'student', stu,
-    'lessons', coalesce(st->'lessons', '[]'::jsonb));
+    'lessons', coalesce(st->'lessons', '[]'::jsonb),
+    'lib', coalesce(st->'lib', '{}'::jsonb));
 end $$;
 
 revoke all on function public.sky_save(jsonb, integer) from public, anon;

@@ -76,3 +76,31 @@ test('links keep https only', () => {
   assert.equal(C.cleanLink({ url: 'http://x.com' }), null);
   assert.equal(C.cleanLink({ url: 'kahoot.com', title: 'K' }).url, 'https://kahoot.com/');
 });
+
+test('library: repo names, game folders and urls', () => {
+  assert.equal(C.cleanRepo('https://github.com/Shafi/sky-lib.git'), 'Shafi/sky-lib');
+  assert.equal(C.cleanRepo('not a repo'), '');
+  const items = C.libraryFromTree([
+    { type: 'blob', path: 'Science/Water_cycle.pptx', size: 5 }, { type: 'blob', path: 'notes.pdf', size: 1 },
+    { type: 'blob', path: 'games/space-race/index.html' }, { type: 'blob', path: 'games/space-race/img/ship.png' }, { type: 'blob', path: 'games/space-race/help.html' },
+    { type: 'blob', path: '.github/x.html' }, { type: 'blob', path: 'README.md' }, { type: 'tree', path: 'Science' }, { type: 'blob', path: 'quiz.html' },
+  ]);
+  assert.deepEqual(items.map(i => [i.kind, i.title, i.group]), [['slides', 'Water cycle', 'Science'], ['doc', 'notes', 'General'], ['game', 'space race', 'games'], ['game', 'quiz', 'General']]);
+  const u = C.libUrl('Shafi/sky-lib', 'main', items[0]);
+  assert.equal(u.raw, 'https://raw.githubusercontent.com/Shafi/sky-lib/main/Science/Water_cycle.pptx');
+  assert.ok(u.office.startsWith('https://view.officeapps.live.com/op/embed.aspx?src=https%3A%2F%2Fraw.'));
+  assert.equal(C.libUrl('Shafi/sky-lib', 'main', items[2]).site, 'https://shafi.github.io/sky-lib/games/space-race/index.html');
+  const lib = C.normalize({ lib: { repo: 'a/b', branch: 'main', items: [{ path: '../x.pptx', kind: 'slides' }, { path: 'ok.pptx', kind: 'slides' }, { path: 'e.exe', kind: 'virus' }] } }).lib;
+  assert.deepEqual(lib.items.map(i => i.path), ['ok.pptx']);
+});
+
+test('games: sums are fair and scrambles differ', () => {
+  const G = require('../games.js');
+  for (let level = 1; level <= 3; level++) for (let i = 0; i < 200; i++) {
+    const q = G.mathQ(level);
+    assert.equal(new Set(q.options).size, 4); assert.ok(q.options.includes(q.answer)); assert.ok(q.options.every(o => o >= 0));
+    const [a, op, b] = q.text.split(' '); assert.equal({ '+': +a + +b, '−': a - b, '×': a * b, '÷': a / b }[op], q.answer);
+  }
+  assert.equal(G.mathQ(1, () => 0).options.length, 4); // a stuck random source must not hang
+  assert.notEqual(G.scramble('planet'), 'planet'); assert.notEqual(G.scramble('aab', () => 0.99), 'aab');
+});
