@@ -196,6 +196,8 @@ declare l public.sky_class_logins; f public.sky_pin_fails; ok boolean; k text;
 begin
   select * into l from public.sky_class_logins where code = upper(btrim(coalesce(p_class, '')));
   if not found then return null; end if;
+  -- One guess at a time per child, so a burst of simultaneous guesses cannot slip past the counter.
+  perform pg_advisory_xact_lock(hashtextextended(l.owner::text || '|' || l.class_id || '|' || coalesce(p_student, ''), 0));
   select * into f from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = coalesce(p_student, '');
   if found and f.fails >= 8 and f.since > now() - interval '10 minutes' then return 'LOCKED'; end if;
   select exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student and pin = p_pin) into ok;

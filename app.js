@@ -613,7 +613,7 @@
       const c = cls(), rows = c.students.filter(s => !cloud.pins.some(p => p.class_id === c.id && p.student_id === s.id)).map(s => ({ class_id: c.id, student_id: s.id, pin: newPin() }));
       if (rows.length) { const { error } = await sb.from('sky_pins').insert(rows); if (error) return toast('PINs could not be made. ' + error.message); }
       await loadLogins(); render(); toast('iPad login is on. Print the PIN cards for your class.'); },
-    async ipadoff() { const c = cls(); if (!confirm(`Turn off iPad login for ${c.name}? Students will need a new class code later.`)) return; await sb.from('sky_class_logins').delete().match({ class_id: c.id }); await loadLogins(); render(); },
+    async ipadoff() { const c = cls(); if (!confirm(`Turn off iPad login for ${c.name}? The class code and picture PINs stop working. Turning it on again makes new ones.`)) return; await sb.from('sky_class_logins').delete().match({ class_id: c.id }); await sb.from('sky_pins').delete().match({ class_id: c.id }); await loadLogins(); render(); },
     pincards() {
       const c = cls(), login = cloud.logins.find(l => l.class_id === c.id), w = window.open('', '_blank'); if (!w || !login) return toast('Allow pop-ups for this site to print PIN cards.');
       const cards = c.students.map(s => { const p = cloud.pins.find(x => x.class_id === c.id && x.student_id === s.id); return p ? `<div class="card"><b>${esc(s.name)}</b><span class="pics">${[...p.pin].map(d => PIN_PICS[+d - 1]).join(' ')}</span><small>Class code ${esc(login.code)}</small></div>` : ''; }).join('');
