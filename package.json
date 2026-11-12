@@ -1,1 +1,1 @@
-{"name":"skyclass","private":true,"scripts":{"test":"node --test tests/core.test.cjs tests/cloud.test.cjs","start":"python -m http.server 8766 --bind 127.0.0.1"},"devDependencies":{"@electric-sql/pglite":"0.5.8"}}
+{"name":"skyclass","private":true,"scripts":{"test":"node --test tests/core.test.cjs tests/cloud.test.cjs tests/copy.test.cjs","start":"python -m http.server 8766 --bind 127.0.0.1"},"devDependencies":{"@electric-sql/pglite":"0.5.8"}}
