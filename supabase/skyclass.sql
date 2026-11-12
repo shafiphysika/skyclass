@@ -102,6 +102,8 @@ begin
     'lessons', coalesce(st->'lessons', '[]'::jsonb),
     'lib', coalesce(st->'lib', '{}'::jsonb),
     'sets', coalesce(st->'sets', '[]'::jsonb),
+    'packs', coalesce(st->'packs', '[]'::jsonb),
+    'credit', jsonb_build_object(c.student_id, coalesce(cls->'credit'->c.student_id, '{}'::jsonb)),
     'assign', coalesce(cls->'assign', '[]'::jsonb),
     -- this child's practice scores and check-ins: from the class device (in the school record) and from home (tables)
     'localResults', coalesce((select jsonb_object_agg(r.key, r.value->c.student_id) from jsonb_each(case when jsonb_typeof(cls->'results') = 'object' then cls->'results' else '{}'::jsonb end) r where r.value ? c.student_id), '{}'::jsonb),
@@ -142,6 +144,84 @@ begin
     on conflict (owner, class_id, student_id, day) do update set mood = excluded.mood;
   return true;
 end $$;
+-- iPad login without QR codes: a class code shows first names; each child then enters a 4-picture PIN.
+create table if not exists public.sky_class_logins (
+  code text primary key check (code ~ '^[A-HJ-NP-Z2-9]{8}$'),
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  class_id text not null check (length(class_id) between 1 and 40),
+  unique (owner, class_id)
+);
+create table if not exists public.sky_pins (
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  class_id text not null check (length(class_id) between 1 and 40),
+  student_id text not null check (length(student_id) between 1 and 40),
+  pin text not null check (pin ~ '^[1-8]{4}$'),
+  primary key (owner, class_id, student_id)
+);
+create table if not exists public.sky_pin_fails (
+  owner uuid not null references auth.users(id) on delete cascade, class_id text not null, student_id text not null,
+  fails integer not null default 0, since timestamptz not null default now(), primary key (owner, class_id, student_id)
+);
+alter table public.sky_class_logins enable row level security;
+alter table public.sky_pins enable row level security;
+alter table public.sky_pin_fails enable row level security;
+revoke all on public.sky_class_logins, public.sky_pins, public.sky_pin_fails from anon, authenticated;
+grant select, insert, delete on public.sky_class_logins to authenticated;
+grant select, insert, update, delete on public.sky_pins to authenticated;
+drop policy if exists sky_class_logins_own on public.sky_class_logins;
+create policy sky_class_logins_own on public.sky_class_logins for all to authenticated using (owner = (select auth.uid())) with check (owner = (select auth.uid()));
+drop policy if exists sky_pins_own on public.sky_pins;
+create policy sky_pins_own on public.sky_pins for all to authenticated using (owner = (select auth.uid())) with check (owner = (select auth.uid()));
+
+-- First names of children who have a PIN, for the "tap your name" screen. Nothing else about them.
+create or replace function public.sky_class_roster(p_class text) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare l public.sky_class_logins; cls jsonb;
+begin
+  select * into l from public.sky_class_logins where code = upper(btrim(coalesce(p_class, '')));
+  if not found then return null; end if;
+  select x into cls from public.sky_schools s, jsonb_array_elements(coalesce(s.state->'classes', '[]'::jsonb)) x where s.owner = l.owner and x->>'id' = l.class_id limit 1;
+  if cls is null then return null; end if;
+  return jsonb_build_object('name', cls->'name', 'students', coalesce((
+    select jsonb_agg(jsonb_build_object('id', st->>'id', 'name', split_part(btrim(st->>'name'), ' ', 1)) order by o)
+    from jsonb_array_elements(cls->'students') with ordinality t(st, o)
+    where exists (select 1 from public.sky_pins p where p.owner = l.owner and p.class_id = l.class_id and p.student_id = st->>'id')), '[]'::jsonb));
+end $$;
+
+-- Checks a child's picture PIN and hands back their family code for this visit. Eight wrong tries locks
+-- that child for ten minutes, so PINs cannot be guessed by trying them all.
+create or replace function public.sky_pin_login(p_class text, p_student text, p_pin text) returns text
+language plpgsql security definer set search_path = '' as $$
+declare l public.sky_class_logins; f public.sky_pin_fails; ok boolean; k text;
+begin
+  select * into l from public.sky_class_logins where code = upper(btrim(coalesce(p_class, '')));
+  if not found then return null; end if;
+  select * into f from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = coalesce(p_student, '');
+  if found and f.fails >= 8 and f.since > now() - interval '10 minutes' then return 'LOCKED'; end if;
+  select exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student and pin = p_pin) into ok;
+  if not ok then
+    if not exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student) then return null; end if;
+    insert into public.sky_pin_fails (owner, class_id, student_id, fails, since) values (l.owner, l.class_id, p_student, 1, now())
+      on conflict (owner, class_id, student_id) do update set
+        fails = case when public.sky_pin_fails.since < now() - interval '10 minutes' then 1 else public.sky_pin_fails.fails + 1 end,
+        since = case when public.sky_pin_fails.since < now() - interval '10 minutes' then now() else public.sky_pin_fails.since end;
+    return null;
+  end if;
+  delete from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = p_student;
+  select code into k from public.sky_codes where owner = l.owner and class_id = l.class_id and student_id = p_student;
+  if k is null then
+    loop
+      select string_agg(substr('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', (get_byte(b, i) % 32) + 1, 1), '') into k
+        from (select uuid_send(gen_random_uuid()) b) r, generate_series(0, 9) i;
+      exit when not exists (select 1 from public.sky_codes where code = k);
+    end loop;
+    insert into public.sky_codes (code, owner, class_id, student_id) values (k, l.owner, l.class_id, p_student);
+  end if;
+  return k;
+end $$;
+revoke all on function public.sky_class_roster(text), public.sky_pin_login(text, text, text) from public;
+grant execute on function public.sky_class_roster(text), public.sky_pin_login(text, text, text) to anon, authenticated;
+
 revoke all on function public.sky_family_play(text, text, integer, integer), public.sky_family_checkin(text, date, integer) from public;
 grant execute on function public.sky_family_play(text, text, integer, integer), public.sky_family_checkin(text, date, integer) to anon, authenticated;
 

@@ -36,9 +36,9 @@
   const newStudent = (name, points = 0) => ({ id: uid(), name: clip(name, MAX_NAME), points: int(points, 0, 1e6, 0), log: [] });
   const newClass = (name, names = []) => ({
     id: uid(), name: clip(name, 40) || 'My class', students: names.map(n => newStudent(n)),
-    attendance: {}, posts: [], goal: { target: 300, reward: 'Game time' }, assign: [], results: {}, checkin: {}, race: null,
+    attendance: {}, posts: [], goal: { target: 300, reward: 'Game time' }, assign: [], results: {}, checkin: {}, race: null, credit: {},
   });
-  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], lib: { repo: '', branch: 'main', items: [], drive: '' }, sets: sampleSets(), activeClass: null });
+  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], lib: { repo: '', branch: 'main', items: [], drive: '' }, sets: sampleSets(), packs: [], activeClass: null });
 
   // Trust boundary: anything loaded from storage or an imported file goes through here.
   function normalize(raw) {
@@ -65,10 +65,16 @@
         text: String((p && p.text) || '').slice(0, MAX_TEXT), due: /^\d{4}-\d{2}-\d{2}$/.test(p && p.due) ? p.due : '', t: int(p && p.t, 0, 9e15, Date.now()),
       })).filter(p => p.text.trim());
       cls.goal = { target: int(c && c.goal && c.goal.target, 10, 100000, 300), reward: clip(c && c.goal && c.goal.reward, 60) || 'Game time' };
-      cls.assign = (Array.isArray(c && c.assign) ? c.assign : []).slice(-30).map(a => a && {
+      // An assignment is either a set played as one game, or one skill station of a story mission.
+      cls.assign = (Array.isArray(c && c.assign) ? c.assign : []).slice(-80).map(a => a && (a.pack ? {
+        id: typeof a.id === 'string' ? clip(a.id, 40) : uid(), pack: clip(a.pack, 30), skill: SKILL_IDS.includes(a.skill) ? a.skill : 'L', t: int(a.t, 0, 9e15, Date.now()),
+      } : {
         id: typeof a.id === 'string' ? clip(a.id, 40) : uid(), setId: clip(a.setId, 40), game: SET_GAME_IDS.includes(a.game) ? a.game : 'flash',
         due: /^\d{4}-\d{2}-\d{2}$/.test(a.due) ? a.due : '', t: int(a.t, 0, 9e15, Date.now()),
-      }).filter(Boolean);
+      })).filter(Boolean);
+      cls.credit = {};
+      for (const [sid, m] of Object.entries((c && c.credit) || {})) if (ids.has(sid) && m && typeof m === 'object')
+        for (const [k, v] of Object.entries(m).slice(0, 400)) (cls.credit[sid] = cls.credit[sid] || {})[clip(k, 40)] = int(v, 0, 3, 0);
       cls.results = {};
       for (const a of cls.assign) {
         const m = c && c.results && c.results[a.id]; if (!m || typeof m !== 'object') continue;
@@ -87,8 +93,9 @@
     s.links = (Array.isArray(raw.links) ? raw.links : []).slice(0, 60).map(cleanLink).filter(Boolean);
     s.lib = cleanLib(raw.lib);
     if (Array.isArray(raw.sets)) s.sets = raw.sets.slice(0, 100).map(normalizeSet).filter(Boolean);
-    const setIds = new Set(s.sets.map(x => x.id));
-    for (const k of s.classes) { k.assign = k.assign.filter(a => setIds.has(a.setId)); for (const id of Object.keys(k.results)) if (!k.assign.some(a => a.id === id)) delete k.results[id]; }
+    if (Array.isArray(raw.packs)) s.packs = raw.packs.slice(0, 60).map(normalizePack).filter(Boolean);
+    const setIds = new Set(s.sets.map(x => x.id)), packIds = new Set(s.packs.map(x => x.id));
+    for (const k of s.classes) { k.assign = k.assign.filter(a => a.pack ? packIds.has(a.pack) : setIds.has(a.setId)); for (const id of Object.keys(k.results)) if (!k.assign.some(a => a.id === id)) delete k.results[id]; }
     s.activeClass = s.classes.some(c => c.id === raw.activeClass) ? raw.activeClass : (s.classes[0] ? s.classes[0].id : null);
     return s;
   }
@@ -178,6 +185,102 @@
     return { best: top.best, total: top.total, tries: a.tries + b.tries, t: Math.max(a.t, b.t) };
   }
   function moodsFor(cls, day) { const m = cls.checkin[day] || {}, out = {}; for (const [sid, v] of Object.entries(m)) out[sid] = v; return out; }
+  /* Story missions: one story becomes four skill stations that score themselves. */
+  const SKILL_IDS = ['L', 'R', 'W', 'S'];
+  const SKILLS4 = { L: ['🎧', 'Listening'], R: ['📖', 'Reading'], W: ['✍️', 'Writing'], S: ['🎤', 'Speaking'] };
+  const CREW = [['🐙', 'Octo the Explorer'], ['👾', 'Pixel'], ['🦄', 'Comet Unicorn'], ['🐲', 'Nova Dragon'], ['🤖', 'Bolt'], ['🦊', 'Captain Fox'], ['🐳', 'Star Whale'], ['🦉', 'Professor Hoot'],
+    ['🐼', 'Panda Pilot'], ['🦖', 'Rex Rocket'], ['🐧', 'Penguin Astronaut'], ['🐝', 'Buzz Orbiter'], ['🦋', 'Nebula Wings'], ['🐢', 'Turbo Turtle'], ['🦁', 'Leo the Brave'], ['🐬', 'Galaxy Dolphin'],
+    ['🦜', 'Parrot Navigator'], ['🐸', 'Moon Hopper'], ['🦔', 'Spike the Scout'], ['🐨', 'Cosmo Koala']];
+  const httpsUrl = v => { try { const u = new URL(clip(v, 300)); return u.protocol === 'https:' ? u.href : ''; } catch { return ''; } };
+  function normalizePack(p) {
+    if (!p || typeof p !== 'object') return null;
+    const lines = (a, n, m) => (Array.isArray(a) ? a : []).map(x => clip(x, m)).filter(Boolean).slice(0, n);
+    const pack = {
+      id: typeof p.id === 'string' && /^[\w-]{1,30}$/.test(p.id) ? p.id : 'pk' + uid().slice(0, 10), title: clip(p.title, 80) || 'Story mission', slides: httpsUrl(p.slides),
+      words: (Array.isArray(p.words) ? p.words : []).map(w => w && { w: clip(w.w, 30), pic: clip(w.pic, 12), mean: clip(w.mean, 120) }).filter(w => w && w.w).slice(0, 40),
+      story: lines(p.story, 60, 200), speak: lines(p.speak, 20, 160),
+      questions: (Array.isArray(p.questions) ? p.questions : []).map(q => q && { q: clip(q.q, 160), a: clip(q.a, 80), wrong: lines(q.wrong, 3, 80) }).filter(q => q && q.q && q.a && q.wrong.length).slice(0, 30),
+      tf: (Array.isArray(p.tf) ? p.tf : []).map(x => x && { s: clip(x.s, 160), t: !!x.t }).filter(x => x && x.s).slice(0, 30),
+    };
+    return pack.story.length || pack.words.length ? pack : null;
+  }
+  // Writing format: "Title:", "Slides:", then sections "Words:", "Story:", "Questions:", "True or false:", "Speak:".
+  function parsePack(text, id) {
+    const p = { id, words: [], story: [], questions: [], tf: [], speak: [] }; let sec = '';
+    for (const raw of String(text || '').split('\n')) {
+      const line = raw.trim(); if (!line) continue;
+      const head = line.match(/^(title|slides|words|story|questions|true or false|speak)\s*:\s*(.*)$/i);
+      if (head) { sec = head[1].toLowerCase(); if (sec === 'title') p.title = head[2]; if (sec === 'slides') p.slides = head[2]; continue; }
+      const f = line.split('|').map(x => x.trim());
+      if (sec === 'words') p.words.push({ w: f[0], pic: f.length > 2 ? f[1] : '', mean: f.length > 2 ? f[2] : f[1] || '' });
+      else if (sec === 'story') p.story.push(line);
+      else if (sec === 'speak') p.speak.push(line);
+      else if (sec === 'questions') p.questions.push({ q: f[0], a: f[1], wrong: f.slice(2) });
+      else if (sec === 'true or false') p.tf.push({ s: f[0], t: /^t/i.test(f[1] || '') });
+    }
+    return normalizePack(p);
+  }
+  function packText(p) {
+    return [`Title: ${p.title}`, p.slides ? `Slides: ${p.slides}` : '', 'Words:', ...p.words.map(w => [w.w, w.pic, w.mean].filter((x, i) => x || i === 0).join(' | ')),
+      'Story:', ...p.story, 'Questions:', ...p.questions.map(q => [q.q, q.a, ...q.wrong].join(' | ')), 'True or false:', ...p.tf.map(x => `${x.s} | ${x.t ? 'true' : 'false'}`), 'Speak:', ...p.speak].filter(Boolean).join('\n');
+  }
+  const wordsOf = s => (String(s).toLowerCase().match(/[a-z0-9']+/g) || []).map(w => w.replace(/'/g, ''));
+  // Each item is worth 2 points: right first time 2, close or second try 1.
+  function packStation(p, skill, rand = Math.random) {
+    const sh = a => shuffle(a, rand), short = p.story.filter(l => { const n = wordsOf(l).length; return n >= 3 && n <= 10; });
+    const pics = p.words.filter(w => w.pic), others = (list, x, n) => sh(list.filter(y => y !== x)).slice(0, n);
+    if (skill === 'L') return sh([
+      ...sh(pics).slice(0, 5).map(w => ({ type: 'pick', say: w.w, prompt: 'Listen. Which picture is it?', options: sh([w.pic, ...others(pics.map(x => x.pic), w.pic, 3)]), answer: w.pic, big: true })),
+      ...sh(short).slice(0, pics.length >= 5 ? 3 : 8 - Math.min(5, pics.length)).map(l => ({ type: 'pick', say: l, prompt: 'Listen. Which sentence did you hear?', options: sh([l, ...others(short, l, 2)]), answer: l })),
+    ]).filter(q => q.options.length >= 2);
+    if (skill === 'R') {
+      const qs = sh([...p.questions.map(q => ({ type: 'pick', prompt: q.q, options: sh([q.a, ...q.wrong]), answer: q.a })), ...p.tf.map(x => ({ type: 'pick', prompt: x.s, hint: 'True or false?', options: ['True', 'False'], answer: x.t ? 'True' : 'False' }))]).slice(0, 8);
+      const start = Math.floor(rand() * Math.max(1, p.story.length - 3));
+      if (p.story.length >= 4) qs.push({ type: 'order', prompt: 'Put the story in order.', parts: p.story.slice(start, start + 4) });
+      return qs;
+    }
+    if (skill === 'W') {
+      const spell = sh(p.words.filter(w => /^[A-Za-z]{2,14}$/.test(w.w))).slice(0, 4).map(w => ({ type: 'spell', say: w.w, clue: [w.pic, w.mean].filter(Boolean).join('  '), word: w.w.toLowerCase() }));
+      const build = sh(short.filter(l => wordsOf(l).length <= 8)).slice(0, 2).map(l => ({ type: 'build', prompt: 'Build the sentence.', say: l, parts: l.replace(/[.!?,]+/g, '').split(/\s+/).filter(Boolean) }));
+      const vocab = p.words.map(w => w.w.toLowerCase());
+      const fill = sh(p.story.map(l => [l, vocab.find(v => wordsOf(l).includes(v))]).filter(x => x[1])).slice(0, 2).map(([l, v]) => ({ type: 'pick', prompt: l.replace(new RegExp(`\\b${v}\\b`, 'i'), '_____'), hint: 'Which word is missing?', options: sh([v, ...others(vocab, v, 2)]), answer: v }));
+      return [...spell, ...build, ...fill];
+    }
+    return [...sh(p.words).slice(0, 3).map(w => ({ type: 'say', text: w.w, pic: w.pic })), ...sh(p.speak.length ? p.speak : short).slice(0, 3).map(l => ({ type: 'say', text: l }))];
+  }
+  // Share of the target's words heard in order (0 to 1). Forgiving on case, punctuation and extra words.
+  function speechScore(target, heard) {
+    const t = wordsOf(target), h = wordsOf(heard); let j = 0, hit = 0;
+    for (const w of t) { const k = h.indexOf(w, j); if (k >= 0) { hit++; j = k + 1; } }
+    return t.length ? hit / t.length : 0;
+  }
+  const starsFor = r => { if (!r) return 0; const x = r.best / r.total; return x >= .9 ? 3 : x >= .7 ? 2 : x >= .5 ? 1 : 0; };
+  // Turns new mission stars into class points once, so playing again only adds stars you improved.
+  function creditStars(cls, packs, getResult, now = Date.now()) {
+    let added = 0;
+    for (const p of packs) {
+      const stations = cls.assign.filter(a => a.pack === p.id); if (!stations.length) continue;
+      for (const st of cls.students) {
+        const cr = cls.credit[st.id] = cls.credit[st.id] || {}; let all = stations.length === 4;
+        for (const a of stations) {
+          const s = starsFor(getResult(a.id, st.id)); if (!s) all = false;
+          if (s > (cr[a.id] || 0)) { added += award(cls, st.id, s - (cr[a.id] || 0), `${p.title.slice(0, 30)}: ${SKILLS4[a.skill][1]}`, now); cr[a.id] = s; }
+        }
+        const bk = p.id + ':bonus';
+        if (all && !cr[bk]) { added += award(cls, st.id, 3, `${p.title.slice(0, 30)}: mission complete`, now); cr[bk] = 3; }
+      }
+    }
+    return added;
+  }
+  // The crew member a mission unlocks: shiny when every station has three stars.
+  function crewFor(cls, packs, sid, getResult) {
+    return packs.map((p, i) => {
+      const stations = cls.assign.filter(a => a.pack === p.id); if (stations.length !== 4) return null;
+      const stars = stations.map(a => starsFor(getResult(a.id, sid)));
+      return { pack: p, icon: CREW[i % CREW.length][0], name: CREW[i % CREW.length][1], got: stars.every(s => s > 0), shiny: stars.every(s => s === 3) };
+    }).filter(Boolean);
+  }
+
   function sampleSets() {
     return [parseSetText('Space words', 'The star our planet goes around | sun\nThe planet we live on | earth\nIt shines in the night sky | moon\nA big ball of rock or gas that goes around a star | planet\nIt carries astronauts into space | rocket\nA person who travels into space | astronaut\nA group of stars that makes a picture | constellation\nA ball of ice and dust with a long tail | comet', 'sample-space')].filter(Boolean);
   }
@@ -285,6 +388,6 @@
     ].filter(Boolean);
   }
 
-  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, driveId, libUrl, MOODS, SET_GAME_IDS, normalizeSet, parseSetText, setText, spellTarget, quizQuestions, setGames, recordResult, mergeResult, moodsFor, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
+  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, driveId, libUrl, MOODS, SET_GAME_IDS, SKILL_IDS, SKILLS4, CREW, normalizePack, parsePack, packText, packStation, speechScore, starsFor, creditStars, crewFor, wordsOf, normalizeSet, parseSetText, setText, spellTarget, quizQuestions, setGames, recordResult, mergeResult, moodsFor, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.SkyCore = api;
 })(this);

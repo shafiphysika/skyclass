@@ -19,6 +19,13 @@ A classroom site with three views: teacher, student and parent.
 - **Team race** (Tools): teams race rockets to a planet; ask questions from any set.
 - **Works offline** after the first visit, and can be installed to a phone or tablet home screen.
 
+## Story missions and iPad login
+
+- **Story missions** (Practice tab): one story becomes four stations that score themselves. Listening (hear a word or sentence, pick the picture or sentence), Reading (questions, true or false, put the story in order), Writing (spell words, build sentences, fill the missing word) and Speaking (read aloud; the browser's speech recognition scores it). A story reader reads the whole story aloud line by line.
+- **Stars and rewards:** each station gives up to three stars, plus three for finishing all four. Stars become class points once; improving a score adds the difference. Finishing a mission unlocks a space-crew member, shiny with three stars everywhere.
+- **iPad login** (Classes tab, signed in): turn it on for a class, print the picture PIN cards, and students join with the class code, tap their name and their four pictures. Eight wrong tries lock that child for ten minutes.
+- Story text is the teacher's own content and is stored only in their account, not in this repository.
+
 ## Run it
 
 No build step. Serve the folder and open it:

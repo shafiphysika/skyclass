@@ -2,3 +2,4 @@ node_modules/
 .claude/
 *backup*.json
 dev-stub.html
+private/

@@ -141,3 +141,65 @@ test('assignments, results, check-ins and team race survive normalize safely', (
   assert.equal(C.mergeResult(null, null), null);
   assert.equal(C.normalize({ sets: [{ title: 'x', items: [] }] }).sets.length, 0);
 });
+
+const PACK = `Title: Sample Walk
+Slides: https://drive.google.com/file/d/abc/view
+Words:
+dog | 🐶 | an animal that barks
+park | 🌳 | a place with trees and grass
+ball | ⚽ | a round toy
+cat | 🐱 | an animal that says meow
+Story:
+We go to the park.
+My dog runs fast.
+We throw the ball.
+The cat is sleeping.
+We say thank you to our friends.
+Questions:
+Where do they go? | the park | the shop | the sea
+True or false:
+The dog runs fast. | true
+The cat is running. | false
+Speak:
+Thank you, friend!`;
+
+test('story missions: parsing and four stations', () => {
+  const p = C.parsePack(PACK, 'walk1');
+  assert.equal(p.title, 'Sample Walk'); assert.equal(p.slides, 'https://drive.google.com/file/d/abc/view');
+  assert.deepEqual(p.words[0], { w: 'dog', pic: '🐶', mean: 'an animal that barks' });
+  assert.equal(p.story.length, 5); assert.deepEqual(p.questions[0].wrong, ['the shop', 'the sea']); assert.deepEqual(p.tf.map(x => x.t), [true, false]);
+  assert.equal(C.parsePack(C.packText(p), 'walk1').story.length, 5, 'text round-trips');
+  const L = C.packStation(p, 'L'), R = C.packStation(p, 'R'), W = C.packStation(p, 'W'), S = C.packStation(p, 'S');
+  assert.ok(L.length >= 4 && L.every(q => q.options.includes(q.answer) && q.say));
+  assert.ok(R.some(q => q.type === 'order') && R.filter(q => q.type === 'pick').every(q => q.options.includes(q.answer)));
+  assert.ok(W.some(q => q.type === 'spell') && W.some(q => q.type === 'build') && W.some(q => q.type === 'pick' && q.prompt.includes('_____')));
+  assert.equal(S.length, 4); assert.equal(S[3].text, 'Thank you, friend!');
+  assert.equal(C.parsePack('Title: nothing'), null);
+  assert.equal(C.normalizePack({ title: 'x', story: ['a b c'], slides: 'javascript:alert(1)' }).slides, '');
+});
+
+test('speech scoring is forgiving and in order', () => {
+  assert.equal(C.speechScore('Thank you, neighbor!', 'thank you neighbor'), 1);
+  assert.equal(C.speechScore('Thank you, neighbor!', 'thank you'), 2 / 3);
+  assert.equal(C.speechScore('we take our time', 'we take our time today yes'), 1);
+  assert.equal(C.speechScore("it's important", 'its important'), 1);
+  assert.equal(C.speechScore('dog', 'cat'), 0);
+});
+
+test('mission stars become points once, improvements add, crew unlocks', () => {
+  const st = C.emptyState(); st.packs = [C.parsePack(PACK, 'walk1')]; const c = C.newClass('3A', ['Ali']); st.classes.push(c);
+  c.assign = C.SKILL_IDS.map(k => ({ id: 'walk1:' + k, pack: 'walk1', skill: k }));
+  const n = C.normalize(st); const k = n.classes[0], sid = k.students[0].id;
+  const res = { 'walk1:L': { best: 10, total: 10 }, 'walk1:R': { best: 6, total: 10 } };
+  const get = (aid, s) => s === sid ? res[aid] : null;
+  assert.equal(C.creditStars(k, n.packs, get), 3 + 1); assert.equal(k.students[0].points, 4);
+  assert.equal(C.creditStars(k, n.packs, get), 0, 'nothing twice');
+  res['walk1:R'] = { best: 9, total: 10 }; res['walk1:W'] = { best: 7, total: 10 }; res['walk1:S'] = { best: 5, total: 10 };
+  assert.equal(C.creditStars(k, n.packs, get), 2 + 2 + 1 + 3, 'improvement plus completion bonus');
+  assert.equal(k.students[0].points, 12);
+  const crew = C.crewFor(k, n.packs, sid, get)[0];
+  assert.deepEqual([crew.got, crew.shiny, crew.icon], [true, false, '🐙']);
+  const again = C.normalize(JSON.parse(JSON.stringify(n))).classes[0];
+  assert.equal(again.credit[sid]['walk1:bonus'], 3); assert.equal(again.assign.length, 4);
+  assert.equal(C.normalize({ ...n, packs: [] }).classes[0].assign.length, 0, 'deleting the story removes its stations');
+});

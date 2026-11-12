@@ -62,6 +62,7 @@ test('teachers are isolated, saves are revision-checked, family codes show one c
     assert.equal(v.lib.items[0].path, 'x.pptx');
     assert.ok(!JSON.stringify(v).includes('Sara'), 'no other child leaks');
     assert.ok(!('students' in v.class));
+    assert.deepEqual(v.credit, { s1: {} });
 
     // practice and check-ins from home
     assert.equal(v.assign[0].id, 'a1');
@@ -95,6 +96,30 @@ test('teachers are isolated, saves are revision-checked, family codes show one c
     await as(T1);
     assert.equal((await q('select * from public.sky_results')).length, 1);
     assert.equal((await q('select mood from public.sky_checkins'))[0].mood, 2);
+
+    // iPad login: class code -> first names of children with a PIN -> PIN -> their family code
+    await as(T1);
+    await q("insert into public.sky_class_logins(code,class_id) values ('CLASS234','c1')");
+    await q("insert into public.sky_pins(class_id,student_id,pin) values ('c1','s2','1234')");
+    await assert.rejects(q("insert into public.sky_pins(class_id,student_id,pin) values ('c1','s1','9999')"), /check/);
+    await as(T2);
+    assert.equal((await q('select * from public.sky_pins')).length, 0, 'other teacher cannot read PINs');
+    await assert.rejects(q("insert into public.sky_class_logins(code,owner,class_id) values ('CLASS235',$1,'c1')", [T1]), /row-level security/);
+    await as(null);
+    await assert.rejects(q('select * from public.sky_pins'), /permission denied/);
+    assert.equal((await q("select public.sky_class_roster('NOPE2345') v"))[0].v, null);
+    const roster = (await q("select public.sky_class_roster(' class234 ') v"))[0].v;
+    assert.deepEqual(roster, { name: '4 Blue', students: [{ id: 's2', name: 'Sara' }] }, 'only children with a PIN, first name only');
+    const login = async pin => (await q("select public.sky_pin_login('CLASS234','s2',$1) k", [pin]))[0].k;
+    assert.equal((await q("select public.sky_pin_login('CLASS234','s1','1234') k"))[0].k, null, 'no PIN, no login');
+    for (let i = 0; i < 7; i++) assert.equal(await login('1111'), null);
+    const k1 = await login('1234'); assert.match(k1, /^[A-HJ-NP-Z2-9]{10}$/, 'right PIN gives a family code');
+    assert.equal(await login('1234'), k1, 'same code next time');
+    assert.equal((await q('select public.sky_family_view($1) v', [k1]))[0].v.student.name, 'Sara');
+    for (let i = 0; i < 8; i++) await login('1111');
+    assert.equal(await login('1234'), 'LOCKED', 'eight wrong tries locks even the right PIN');
+    await db.exec('reset role'); await db.exec("update public.sky_pin_fails set since = now() - interval '11 minutes'");
+    await as(null); assert.equal(await login('1234'), k1, 'unlocks after ten minutes');
 
     await as(T1); await q("delete from public.sky_codes where code='ABCDEFGH23'");
     await as(null);

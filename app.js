@@ -15,7 +15,9 @@
   // Online mode is optional: without config.js values (or if the library fails to load) everything stays on this device.
   const cfg = window.SKY_CONFIG || {};
   const sb = window.supabase && cfg.supabaseUrl && cfg.supabaseKey ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
-  const cloud = { user: null, rev: 0, status: '', codes: [], res: {}, moods: {} };
+  const cloud = { user: null, rev: 0, status: '', codes: [], res: {}, moods: {}, logins: [], pins: [] };
+  const PIN_PICS = ['🐶', '🐱', '🦊', '🐼', '🐸', '🐵', '🦁', '🐰'];
+  let roster = null, pinFor = null, pinTyped = ''; // iPad login in progress
   let fam = null, famCode = null, syncT; // fam: the read-only school a family code unlocked; famCode stays in memory only
 
   function saveLocal() {
@@ -185,6 +187,115 @@
       <form class="inline" data-form="race"><label>Teams<input name="names" value="${esc(r.teams.map(t => t.name).join(', '))}" maxlength="140" placeholder="Rockets, Comets, Stars"></label><label>Points to win<input type="number" name="target" min="5" max="999" value="${r.target}"></label><button class="pill">Save teams</button><button type="button" class="pill" data-act="racereset">Reset scores</button></form></section>`;
   }
 
+  /* ---------- story missions ---------- */
+  const packById = id => S().packs.find(p => p.id === id);
+  const stationsOf = (c, pid) => c ? c.assign.filter(a => a.pack === pid) : [];
+  const getRes = c => (aid, sid) => resultFor(c, aid, sid);
+  const starRow = n => '⭐'.repeat(n) + `<i class="dim">${'⭐'.repeat(3 - n)}</i>`;
+  function missionsHTML(teacher) {
+    const c = cls(), s = teacher ? null : student();
+    const packs = teacher ? S().packs : S().packs.filter(p => stationsOf(c, p.id).length);
+    if (!packs.length && !teacher) return '';
+    return `<div class="bar"><h2 class="h">🚀 Story missions</h2>${teacher ? '<button class="btn" data-act="editpack">New story mission</button>' : ''}</div>
+      ${teacher ? '<p class="lead">One story becomes four stations: listening, reading, writing and speaking. Each scores itself, and stars go straight onto the class points.</p>' : ''}
+      <div class="missions">${packs.map((p, i) => {
+        const st = stationsOf(c, p.id), live = st.length === 4, crew = c && s ? C.crewFor(c, S().packs, s.id, getRes(c)).find(x => x.pack.id === p.id) : null;
+        const cr = C.CREW[S().packs.indexOf(p) % C.CREW.length];
+        return `<article class="mission" style="--h:${hash(p.title) % 360};--i:${i}"><span class="crew ${crew && crew.got ? 'got' : ''} ${crew && crew.shiny ? 'shiny' : ''}" title="${esc(cr[1])}">${cr[0]}</span>
+          <h3>${esc(p.title)}</h3><p>${p.story.length} story lines, ${p.words.length} words</p>
+          ${s ? `<div class="stations">${C.SKILL_IDS.map(k => { const a = st.find(x => x.skill === k), r = a && resultFor(c, a.id, s.id); return `<span>${C.SKILLS4[k][0]}<b>${starRow(C.starsFor(r))}</b></span>`; }).join('')}</div>` : ''}
+          <div class="chips">${teacher ? `${c ? (live ? `<button class="btn" data-act="packprog" data-pack="${esc(p.id)}">Progress in ${esc(c.name)}</button><button class="pill" data-act="packstop" data-pack="${esc(p.id)}">Stop for this class</button>` : `<button class="btn" data-act="packstart" data-pack="${esc(p.id)}">Start for ${esc(c.name)}</button>`) : ''}
+            <button class="pill" data-act="mission" data-pack="${esc(p.id)}">Preview</button><button class="pill" data-act="editpack" data-pack="${esc(p.id)}">Edit</button>` : `<button class="btn" data-act="mission" data-pack="${esc(p.id)}">${st.some(a => resultFor(c, a.id, s.id)) ? 'Continue mission' : 'Start mission'}</button>`}</div>
+          ${teacher ? `<button class="x" data-act="delpack" data-pack="${esc(p.id)}" aria-label="Delete ${esc(p.title)}">✕</button>` : ''}</article>`;
+      }).join('') || '<p class="empty">No story missions yet. Make one from this week\'s story.</p>'}</div>`;
+  }
+  function crewHTML(c, s) {
+    const crew = C.crewFor(c, S().packs, s.id, getRes(c)); if (!crew.length) return '';
+    return `<h3 class="h">My space crew</h3><p class="lead">Finish all four stations of a mission to meet a new crew member. Three stars everywhere makes them shine.</p>
+      <div class="crewgrid">${crew.map(x => `<div class="crewcard ${x.got ? 'got' : ''} ${x.shiny ? 'shiny' : ''}"><span>${x.got ? x.icon : '❔'}</span><b>${x.got ? esc(x.name) : 'Locked'}</b><small>${esc(x.pack.title)}</small></div>`).join('')}</div>`;
+  }
+  let missionPack = null;
+  function paintMission() {
+    const p = missionPack, c = cls(), s = ui.role === 'teacher' ? null : student(), st = stationsOf(c, p.id);
+    openDlg(`<div class="phead"><span>🚀 ${esc(p.title)}</span><button class="pill" data-act="closedlg">Close</button></div>
+      <div class="mhome"><div class="chips">${p.slides ? `<a class="pill" href="${esc(p.slides)}" target="_blank" rel="noopener noreferrer">📽️ Watch the slides</a>` : ''}${p.story.length ? '<button class="pill" data-act="readstory">📖 Read the story</button>' : ''}</div>
+        <div class="stationgrid">${C.SKILL_IDS.map((k, i) => { const a = st.find(x => x.skill === k), r = a && s ? resultFor(c, a.id, s.id) : null;
+          return `<button class="station s${k}" style="--i:${i}" data-act="station" data-skill="${k}"><span class="big">${C.SKILLS4[k][0]}</span><b>${C.SKILLS4[k][1]}</b><span class="srow">${starRow(C.starsFor(r))}</span><small>${r ? `Best ${r.best} of ${r.total}` : s ? 'Not started' : 'Preview'}</small></button>`; }).join('')}</div>
+        ${s && !st.length ? '<p class="hint">Your teacher has not started this mission for your class, so scores are not saved.</p>' : ''}</div><span></span>`, 'player');
+  }
+  function crewReveal(x) {
+    party();
+    openDlg(`<div class="phead"><span>New crew member!</span><button class="pill" data-act="mission" data-pack="${esc(x.pack.id)}">Back to mission</button></div>
+      <div class="slide reveal ${x.shiny ? 'shiny' : ''}"><span class="big">${x.icon}</span><h2>${esc(x.name)} joined your crew!</h2><p>${x.shiny ? 'Three stars in every station. A shiny crew member!' : 'Get three stars in every station to make them shine.'}</p></div><span></span>`, 'player');
+  }
+  async function stationDone(p, k, score, total) {
+    const c = cls(), s = ui.role === 'teacher' ? null : student(), a = stationsOf(c, p.id).find(x => x.skill === k);
+    if (!s || !a) return;
+    if (k === 'S' && !SkyMissions.canListen()) return; // no microphone scoring here, so do not record a zero
+    const before = C.crewFor(c, S().packs, s.id, getRes(c)).find(x => x.pack.id === p.id), pts = s.points;
+    await saveScore(c, a.id, s, score, total, true);
+    C.creditStars(c, S().packs, getRes(c)); if (!fam) save();
+    const after = C.crewFor(c, S().packs, s.id, getRes(c)).find(x => x.pack.id === p.id);
+    if (s.points > pts) toast(`+${s.points - pts} star${s.points - pts === 1 ? '' : 's'} for ${s.name.split(' ')[0]}!`);
+    if (after && after.got && (!before || !before.got || (after.shiny && !before.shiny))) setTimeout(() => dlg.open && crewReveal(after), 1600);
+  }
+  function packProgress(c, p) {
+    const st = stationsOf(c, p.id), rows = c.students.map(s => ({ s, stars: C.SKILL_IDS.map(k => { const a = st.find(x => x.skill === k); return a ? C.starsFor(resultFor(c, a.id, s.id)) : 0; }) }));
+    const done = rows.filter(r => r.stars.every(x => x > 0)).length;
+    openDlg(`<div class="phead"><span>🚀 ${esc(p.title)}: ${esc(c.name)}</span><button class="pill" data-act="closedlg">Close</button></div>
+      <p>${done} of ${c.students.length} finished all four stations.${cloud.user ? ' <button class="linkish" data-act="refreshprog" data-pack="' + esc(p.id) + '">Refresh</button>' : ''}</p>
+      <div class="pgrid"><b>Student</b>${C.SKILL_IDS.map(k => `<b title="${C.SKILLS4[k][1]}">${C.SKILLS4[k][0]}</b>`).join('')}
+        <b>Class</b>${C.SKILL_IDS.map((k, i) => { const v = rows.filter(r => r.stars[i] > 0); return `<b class="avg">${v.length ? (v.reduce((n, r) => n + r.stars[i], 0) / v.length).toFixed(1) + '⭐' : '–'}<small>${v.length} played</small></b>`; }).join('')}
+        ${rows.map(r => `<span class="nm">${esc(r.s.name)}</span>${r.stars.map(n => `<span class="st${n}">${n ? '⭐'.repeat(n) : '·'}</span>`).join('')}`).join('')}</div>`, 'player');
+  }
+
+  /* ---------- iPad login: class code, tap your name, picture PIN ---------- */
+  const KNOWN = 'skyclass-classes';
+  const knownClasses = () => { try { return JSON.parse(localStorage.getItem(KNOWN)) || []; } catch { return []; } };
+  function loginHTML() {
+    if (!sb) return '';
+    if (roster && pinFor) return `<section class="panel pinpad"><button class="pill" data-act="pinback">← Not ${esc(pinFor.name)}</button><h2 class="h">Hi ${esc(pinFor.name)}! Tap your secret pictures.</h2>
+      <div class="pinshow">${[0, 1, 2, 3].map(i => `<i>${pinTyped[i] ? PIN_PICS[+pinTyped[i] - 1] : ''}</i>`).join('')}</div>
+      <div class="pinkeys">${PIN_PICS.map((p, i) => `<button data-act="pinkey" data-k="${i + 1}" aria-label="Picture ${i + 1}">${p}</button>`).join('')}<button class="pill" data-act="pinclear">Clear</button></div></section>`;
+    if (roster) return `<section class="panel"><div class="bar"><h2 class="h">${esc(roster.name)}: tap your name</h2><button class="pill" data-act="rosterout">Change class</button></div>
+      <div class="cards">${roster.students.map(s => `<div class="card"><button class="give" data-act="rosterpick" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span></button></div>`).join('') || '<p class="empty">Nobody in this class has a picture PIN yet.</p>'}</div></section>`;
+    const known = knownClasses();
+    return `<form class="panel form" data-form="classlogin"><h2 class="h">Join your class</h2>${known.length ? `<div class="chips wide">${known.map(k => `<button type="button" class="btn" data-act="classpick" data-code="${esc(k.code)}">${esc(k.name)}</button>`).join('')}</div>` : ''}
+      <label>Class code from your teacher<input name="code" maxlength="8" autocomplete="off" autocapitalize="characters" required placeholder="ABCD2345"></label><button class="btn">Join</button></form>`;
+  }
+  async function openRoster(code) {
+    code = code.trim().toUpperCase();
+    const { data, error } = await sb.rpc('sky_class_roster', { p_class: code });
+    if (error) return toast('Could not reach the class. Check the internet connection.');
+    if (!data) return toast('That class code did not work. Check it with your teacher.');
+    roster = { code, name: data.name, students: data.students }; pinFor = null; pinTyped = '';
+    const list = knownClasses().filter(k => k.code !== code); list.unshift({ code, name: data.name });
+    try { localStorage.setItem(KNOWN, JSON.stringify(list.slice(0, 8))); } catch { /* remembering is a convenience */ }
+    render();
+  }
+  async function tryPin() {
+    const { data, error } = await sb.rpc('sky_pin_login', { p_class: roster.code, p_student: pinFor.id, p_pin: pinTyped });
+    pinTyped = '';
+    if (error) { render(); return toast('Could not reach the class. Try again.'); }
+    if (data === 'LOCKED') { pinFor = null; render(); return toast('Too many wrong tries. Ask your teacher, or wait ten minutes.'); }
+    if (!data) { render(); const p = $('.pinshow'); if (p) { p.classList.add('bad'); } return toast('Those pictures are not right. Try again.'); }
+    pinFor = null; await openFamily(data, false, false);
+  }
+  function ipadHTML(c) {
+    if (!cloud.user || !c || !c.students.length) return '';
+    const login = cloud.logins.find(l => l.class_id === c.id), pins = cloud.pins.filter(p => p.class_id === c.id), missing = c.students.filter(s => !pins.some(p => p.student_id === s.id)).length;
+    if (!login) return `<section class="panel"><h3>iPad login for ${esc(c.name)}</h3><p>Students join with a class code, tap their name and enter a 4-picture PIN. No QR codes or long codes to type. Save the site to each iPad's home screen once.</p>
+      <button class="btn" data-act="ipadon">Turn on iPad login</button></section>`;
+    return `<section class="panel"><h3>iPad login for ${esc(c.name)}</h3><p>Class code: <code class="bigcode">${esc(login.code)}</code></p>
+      <p>On each iPad: open <b>${esc(location.host + location.pathname)}</b>, choose Student, enter the code once. The iPad remembers the class.</p>
+      <div class="chips"><button class="btn" data-act="pincards">🖨️ Print picture PIN cards</button>${missing ? `<button class="pill" data-act="ipadpins">Make PINs for ${missing} new student${missing === 1 ? '' : 's'}</button>` : ''}<button class="pill danger" data-act="ipadoff">Turn off iPad login</button></div></section>`;
+  }
+  const newPin = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), b => (b % 8) + 1).join('');
+  async function loadLogins() {
+    const [l, p] = await Promise.all([sb.from('sky_class_logins').select('code,class_id'), sb.from('sky_pins').select('class_id,student_id,pin')]);
+    cloud.logins = l.data || []; cloud.pins = p.data || [];
+  }
+
   /* ---------- practice: question sets, assignments and results ---------- */
   const GAME = id => SkyGames.setGames.find(g => g.id === id);
   const setById = id => S().sets.find(s => s.id === id);
@@ -209,7 +320,7 @@
       <div class="chips">${gameBtns(set)}</div>
       ${teacher ? `<div class="chips">${c ? `<button class="btn" data-act="assign" data-set="${esc(set.id)}">Assign to ${esc(c.name)}</button>` : ''}<button class="pill" data-act="print" data-set="${esc(set.id)}">🖨️ Worksheet</button><button class="pill" data-act="editset" data-set="${esc(set.id)}">Edit</button></div>
         <button class="x" data-act="delset" data-set="${esc(set.id)}" aria-label="Delete ${esc(set.title)}">✕</button>` : ''}</article>`).join('');
-    return `<div class="bar"><h2 class="h">${teacher ? 'Practice' : 'My practice'}</h2>${teacher ? `${cloud.user ? '<button class="pill" data-act="refresh">Refresh scores</button>' : ''}<button class="btn" data-act="editset">New question set</button>` : ''}</div>
+    return `${missionsHTML(teacher)}<div class="bar"><h2 class="h">${teacher ? 'Practice' : 'My practice'}</h2>${teacher ? `${cloud.user ? '<button class="pill" data-act="refresh">Refresh scores</button>' : ''}<button class="btn" data-act="editset">New question set</button>` : ''}</div>
       ${c ? `<section class="panel"><h3>${teacher ? `Assigned to ${esc(c.name)}` : 'To do'}</h3>${todo ? `<div class="rows">${todo}</div>` : `<p class="empty">${teacher ? 'Nothing assigned yet. Pick a set below and press Assign.' : 'No practice set for you yet.'}</p>`}</section>` : ''}
       <h3 class="h">${teacher ? 'Question sets' : 'Practise anything'}</h3>${teacher ? '<p class="lead">Type one list, play it as flashcards, spelling or a quiz, print it, or send it home.</p>' : ''}
       <div class="lessons">${sets || '<p class="empty">No question sets yet.</p>'}</div>`;
@@ -282,15 +393,16 @@
       return `<div class="row"><span class="nm">${esc(s.name)}</span>${k ? `<code>${esc(k.code)}</code><button class="pill" data-act="copycode" data-code="${esc(k.code)}">Copy</button>` : ''}<button class="pill" data-act="recode" data-sid="${esc(s.id)}">${k ? 'New code' : 'Make code'}</button></div>`; };
     return `<section class="panel"><h3>Signed in as ${esc(cloud.user.email)}</h3><p id="sync">${esc(cloud.status)}</p><button class="pill" data-act="signout">Sign out</button></section>
       ${c && c.students.length ? `<section class="panel"><h3>Family codes for ${esc(c.name)}</h3><p>A code opens one child's stars, attendance, homework and lessons on any device. At ${esc(location.host + location.pathname)} choose Student or Parent, then enter the code. Treat a code like a password. Making a new code switches the old one off.</p>
-        <div class="chips"><button class="btn" data-act="makecodes">Make codes for everyone</button></div><div class="rows">${c.students.map(row).join('')}</div></section>` : ''}`;
+        <div class="chips"><button class="btn" data-act="makecodes">Make codes for everyone</button></div><div class="rows">${c.students.map(row).join('')}</div></section>` : ''}${ipadHTML(c)}`;
   }
 
   /* ---------- student and parent ---------- */
   function whoHTML(title) {
     const codeForm = sb ? '<form class="panel form" data-form="famcode"><h2 class="h">Enter your family code</h2><label>Code from your teacher<input name="code" maxlength="12" autocomplete="off" autocapitalize="characters" required placeholder="ABCDE23456"></label><label class="check wide"><input type="checkbox" name="keep"> Remember the code on this device. Only tick this on your own phone or computer.</label><button class="btn">Open</button></form>' : '';
-    if (!state.classes.length) return codeForm || '<p class="empty">Your teacher has not set up a class on this device yet.</p>';
+    const join = loginHTML(); if (roster) return join;
+    if (!state.classes.length) return join + codeForm || '<p class="empty">Your teacher has not set up a class on this device yet.</p>';
     const c = cls();
-    return `${codeForm}<h2 class="h">${codeForm ? 'Or, on the class device: ' : ''}${title}</h2><label class="pick block">Class <select data-change="class">${state.classes.map(k => `<option value="${esc(k.id)}" ${k.id === c.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
+    return `${join}${codeForm}<h2 class="h">${codeForm ? 'Or, on the class device: ' : ''}${title}</h2><label class="pick block">Class <select data-change="class">${state.classes.map(k => `<option value="${esc(k.id)}" ${k.id === c.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
       <div class="cards">${c.students.map(s => `<div class="card"><button class="give" data-act="who" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span></button></div>`).join('') || '<p class="empty">No students in this class yet.</p>'}</div>`;
   }
   function studentHTML() {
@@ -304,11 +416,12 @@
     const next = C.nextBadge(s.points), prev = C.badgesFor(s.points).pop(), base = prev ? prev.at : 0, mood = moodOf(c, s.id, C.today());
     const checkin = mood ? `<p class="feel">Today you feel ${C.MOODS[mood][0]} ${C.MOODS[mood][1].toLowerCase()}. <button class="linkish" data-act="moodagain">Change</button></p>`
       : `<section class="panel checkin"><h3>Good morning, ${esc(s.name.split(' ')[0])}! How are you feeling?</h3><div class="moods">${[5, 4, 3, 2, 1].map(v => `<button data-act="mood" data-v="${v}"><span>${C.MOODS[v][0]}</span>${C.MOODS[v][1]}</button>`).join('')}</div></section>`;
-    const due = c.assign.filter(a => setById(a.setId) && !resultFor(c, a.id, s.id)).length;
-    return `${checkin}${due ? `<button class="panel todo" data-act="tab" data-tab="practice">🎯 You have ${due} practice ${due === 1 ? 'mission' : 'missions'} waiting. Let's go!</button>` : ''}<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
+    const todoMissions = S().packs.filter(p => { const st = stationsOf(c, p.id); return st.length && st.some(a => !resultFor(c, a.id, s.id)); }).length, todoSets = c.assign.filter(a => !a.pack && setById(a.setId) && !resultFor(c, a.id, s.id)).length;
+    const banner = todoMissions ? `🚀 ${todoMissions === 1 ? 'A story mission is' : todoMissions + ' story missions are'} waiting. Earn stars and meet a new crew member!` : todoSets ? `🎯 You have ${todoSets} practice ${todoSets === 1 ? 'game' : 'games'} waiting. Let's go!` : '';
+    return `${checkin}${banner ? `<button class="panel todo" data-act="tab" data-tab="practice">${banner}</button>` : ''}<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
         ${next ? `<div class="meter"><i style="width:${Math.round((s.points - base) / (next.at - base) * 100)}%"></i></div><p>${next.at - s.points} more to become a ${next.icon} ${next.label}</p>` : '<p>You have every badge. Sky captain!</p>'}</div>
         <button class="pill" data-act="notme">${fam ? 'Use another code' : 'Not me'}</button></section>
-      <div class="badges">${badgesHTML(s.points)}</div>${skyHTML(c, false)}
+      <div class="badges">${badgesHTML(s.points)}</div>${crewHTML(c, s)}${skyHTML(c, false)}
       <h3 class="h">Why I got stars</h3>${logHTML(s, 8)}`;
   }
   const logHTML = (s, n) => s.log.length ? `<ul class="log">${s.log.slice(-n).reverse().map(l => `<li><b class="${l.d < 0 ? 'neg' : ''}">${l.d > 0 ? '+' : ''}${l.d}</b> ${esc(l.r || 'Star')} <small>${niceDate(l.t)}</small></li>`).join('')}</ul>` : '<p class="empty">No stars yet. The first one is coming.</p>';
@@ -451,7 +564,7 @@
     backup() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'skyclass', saved: new Date().toISOString(), state })], { type: 'application/json' })); a.download = `skyclass-backup-${C.today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); },
     restore() { pickFile(o => { if (!o || o.app !== 'skyclass' || !o.state) return toast('That is not a Skyclass backup file.'); if (!confirm('Replace everything on this device with the backup?')) return; state = C.normalize(o.state); save(); render(); toast('Backup restored.'); }); },
     who(b) { ui.who = b.dataset.sid; save(); render(); },
-    notme() { ui.who = null; ui.code = null; fam = null; famCode = null; saveLocal(); render(); },
+    notme() { ui.who = null; ui.code = null; fam = null; famCode = null; pinFor = null; pinTyped = ''; saveLocal(); render(); },
     signup(b) { signIn(b.form, true); },
     async signout() { clearTimeout(syncT); await sb.auth.signOut(); cloud.user = null; cloud.codes = []; cloud.res = {}; cloud.moods = {}; render(); toast('Signed out. Your classes are still on this device.'); },
     async makecodes() {
@@ -466,6 +579,47 @@
       const { error } = await sb.from('sky_codes').insert({ code: newCode(), ...m }); if (error) toast('Code was not made. ' + error.message);
       await loadCodes(); render();
     },
+    mission(b) { missionPack = packById(b.dataset.pack); if (missionPack) paintMission(); },
+    readstory() { endGame(); openDlg(`<div class="phead"><span>📖 ${esc(missionPack.title)}</span><button class="pill" data-act="backmission">Back to mission</button></div><div id="game" class="gamebox"></div><span></span>`, 'player'); stopGame = SkyMissions.reader($('#game'), missionPack); },
+    backmission() { endGame(); paintMission(); },
+    station(b) {
+      const p = missionPack, k = b.dataset.skill; endGame();
+      openDlg(`<div class="phead"><span>${C.SKILLS4[k][0]} ${esc(p.title)}: ${C.SKILLS4[k][1]}</span><button class="pill" data-act="backmission">Back to mission</button></div><div id="game" class="gamebox"></div><span></span>`, 'player');
+      stopGame = SkyMissions.run($('#game'), C.packStation(p, k), { fresh: () => C.packStation(p, k), done: (score, total) => stationDone(p, k, score, total) });
+    },
+    editpack(b) {
+      const p = b.dataset.pack ? packById(b.dataset.pack) : null;
+      openDlg(`<form data-form="pack" class="form"><h2 class="h">${p ? 'Edit story mission' : 'New story mission'}</h2><input type="hidden" name="id" value="${p ? esc(p.id) : ''}">
+        <label class="wide">Write the mission<textarea name="text" rows="18" required placeholder="Title: My story&#10;Slides: https://drive.google.com/…&#10;Words:&#10;dog | 🐶 | an animal that barks&#10;Story:&#10;Every day, we go for a walk.&#10;Questions:&#10;What do they do every day? | go for a walk | go swimming | go to the zoo&#10;True or false:&#10;They walk every day. | true&#10;Speak:&#10;Thank you, neighbor!">${p ? esc(C.packText(p)) : ''}</textarea></label>
+        <p class="hint wide"><b>Words:</b> word | picture emoji | meaning. <b>Story:</b> one sentence per line. <b>Questions:</b> question | right answer | wrong | wrong. <b>True or false:</b> sentence | true or false. <b>Speak:</b> sentences to say aloud. Listening uses the words and story, writing uses the words and short sentences.</p>
+        <button class="btn">Save mission</button><button type="button" class="pill" data-act="closedlg">Cancel</button></form>`);
+    },
+    delpack(b) { const p = packById(b.dataset.pack); if (p && confirm(`Delete "${p.title}" and its scores in every class? Stars already given stay.`)) { state.packs = state.packs.filter(x => x !== p); state = C.normalize(state); save(); render(); } },
+    packstart(b) { const c = cls(), p = packById(b.dataset.pack); if (!p || stationsOf(c, p.id).length) return; C.SKILL_IDS.forEach(k => c.assign.push({ id: `${p.id}:${k}`, pack: p.id, skill: k, t: Date.now() })); state = C.normalize(state); save(); render(); toast(`${p.title} started for ${c.name}.`); },
+    packstop(b) { const c = cls(); if (!confirm('Stop this mission for the class? Its scores in this class are removed; stars already given stay.')) return; c.assign = c.assign.filter(a => a.pack !== b.dataset.pack); state = C.normalize(state); save(); render(); },
+    async packprog(b) { if (cloud.user) { await loadExtras(); creditAll(); } packProgress(cls(), packById(b.dataset.pack)); },
+    async refreshprog(b) { await loadExtras(); creditAll(); packProgress(cls(), packById(b.dataset.pack)); },
+    classpick(b) { openRoster(b.dataset.code); },
+    rosterout() { roster = null; pinFor = null; render(); },
+    rosterpick(b) { pinFor = roster.students.find(s => s.id === b.dataset.sid); pinTyped = ''; render(); },
+    pinback() { pinFor = null; pinTyped = ''; render(); },
+    pinclear() { pinTyped = ''; render(); },
+    pinkey(b) { if (pinTyped.length >= 4) return; pinTyped += b.dataset.k; tone(); render(); if (pinTyped.length === 4) tryPin(); },
+    async ipadon() {
+      const c = cls(), code = Array.from(crypto.getRandomValues(new Uint8Array(8)), x => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[x % 32]).join('');
+      const { error } = await sb.from('sky_class_logins').insert({ code, class_id: c.id }); if (error) return toast('iPad login could not be turned on. ' + error.message);
+      await acts.ipadpins(); },
+    async ipadpins() {
+      const c = cls(), rows = c.students.filter(s => !cloud.pins.some(p => p.class_id === c.id && p.student_id === s.id)).map(s => ({ class_id: c.id, student_id: s.id, pin: newPin() }));
+      if (rows.length) { const { error } = await sb.from('sky_pins').insert(rows); if (error) return toast('PINs could not be made. ' + error.message); }
+      await loadLogins(); render(); toast('iPad login is on. Print the PIN cards for your class.'); },
+    async ipadoff() { const c = cls(); if (!confirm(`Turn off iPad login for ${c.name}? Students will need a new class code later.`)) return; await sb.from('sky_class_logins').delete().match({ class_id: c.id }); await loadLogins(); render(); },
+    pincards() {
+      const c = cls(), login = cloud.logins.find(l => l.class_id === c.id), w = window.open('', '_blank'); if (!w || !login) return toast('Allow pop-ups for this site to print PIN cards.');
+      const cards = c.students.map(s => { const p = cloud.pins.find(x => x.class_id === c.id && x.student_id === s.id); return p ? `<div class="card"><b>${esc(s.name)}</b><span class="pics">${[...p.pin].map(d => PIN_PICS[+d - 1]).join(' ')}</span><small>Class code ${esc(login.code)}</small></div>` : ''; }).join('');
+      w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(c.name)} PIN cards</title><style>body{font:16px system-ui,sans-serif;margin:1cm}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.4cm}.card{border:2px dashed #888;border-radius:12px;padding:.4cm;display:grid;gap:.2cm;text-align:center;break-inside:avoid}.card b{font-size:20px}.pics{font-size:38px;letter-spacing:.1em}small{color:#555}@media print{button{display:none}}</style>
+        <button onclick="print()">Print</button><h2>${esc(c.name)}: secret picture PINs</h2><p>Site: ${esc(location.host + location.pathname)}. Cut out the cards. Each child taps their name, then their four pictures in order.</p><div class="grid">${cards}</div>`);
+      w.document.close(); },
     setplay(b) {
       const set = setById(b.dataset.set), g = GAME(b.dataset.game); if (!set || !g) return;
       const aid = b.dataset.assign, s = ui.role === 'teacher' ? null : student(), c = cls();
@@ -532,6 +686,8 @@
   /* ---------- online: teacher account, saving, family codes ---------- */
   function setStatus(t) { cloud.status = t; const el = $('#sync'); if (el) el.textContent = t; }
   const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+  // Mission stars earned at home become class points on the teacher's device, once each.
+  function creditAll() { let n = 0; for (const c of state.classes) n += C.creditStars(c, state.packs, getRes(c)); if (n) save(); return n; }
   async function loadExtras() {
     if (!cloud.user) return;
     const since = C.today(new Date(Date.now() - 14 * 864e5));
@@ -539,12 +695,12 @@
     cloud.res = {}; (r.data || []).forEach(x => { cloud.res[`${x.class_id}|${x.student_id}|${x.assign_id}`] = { best: x.best, total: x.total, tries: x.tries, t: Date.parse(x.updated_at) || 0 }; });
     cloud.moods = {}; (m.data || []).forEach(x => { cloud.moods[`${x.class_id}|${x.student_id}|${x.day}`] = x.mood; });
   }
-  async function saveScore(c, aid, s, score, total) {
+  async function saveScore(c, aid, s, score, total, quiet) {
     if (fam) {
       const { data } = await sb.rpc('sky_family_play', { p_code: famCode, p_assign: aid, p_score: score, p_total: total });
       if (!data) return toast('Your score could not be sent. Check your connection and play again.');
     }
-    C.recordResult(c, aid, s.id, score, total); if (!fam) save(); render(); toast(fam ? 'Score sent to your teacher.' : 'Score saved.');
+    C.recordResult(c, aid, s.id, score, total); if (!fam) save(); render(); if (!quiet) toast(fam ? 'Score sent to your teacher.' : 'Score saved.');
   }
   async function checkIn(v) {
     const c = cls(), s = student(), day = C.today(); if (!c || !s) return;
@@ -576,7 +732,7 @@
   async function startSync(user) {
     cloud.user = user;
     if (ui.owner === user.id && ui.dirty) { cloud.rev = ui.rev || 0; await push(); } else await pull(); // unsent edits from this device go up first
-    if (cloud.user) { await loadCodes(); await loadExtras(); }
+    if (cloud.user) { await loadCodes(); await loadExtras(); await loadLogins(); creditAll(); }
     render();
   }
   async function signIn(f, create) {
@@ -595,7 +751,8 @@
       const sid = data.student && data.student.id, results = {}, checkin = {};
       for (const a of data.assign || []) { const r = C.mergeResult(data.localResults && data.localResults[a.id], data.homeResults && data.homeResults[a.id]); if (r) results[a.id] = { [sid]: r }; }
       for (const src of [data.localCheckins || {}, data.homeCheckins || {}]) for (const [d, v] of Object.entries(src)) if (v) checkin[d] = { [sid]: v };
-      fam = C.normalize({ classes: [{ ...data.class, students: [data.student], assign: data.assign, results, checkin }], lessons: data.lessons, lib: data.lib, sets: data.sets });
+      fam = C.normalize({ classes: [{ ...data.class, students: [data.student], assign: data.assign, results, checkin, credit: data.credit }], lessons: data.lessons, lib: data.lib, sets: data.sets, packs: data.packs });
+      if (fam.classes[0]) C.creditStars(fam.classes[0], fam.packs, (aid, s) => (fam.classes[0].results[aid] || {})[s]); // shows stars the teacher's device has not collected yet
     }
     if (!data || !fam.classes[0] || !fam.classes[0].students[0]) { ui.code = null; fam = null; famCode = null; saveLocal(); render(); return toast('That code did not work. Check it with your teacher.'); }
     fam.classes[0].total = data.class.total; famCode = code; ui.code = keep ? code : null; saveLocal(); render();
@@ -611,6 +768,12 @@
     addstudents(f) { const c = cls(), have = new Set(c.students.map(s => s.name.toLowerCase())), names = C.parseNames(f.names.value).filter(n => !have.has(n.toLowerCase())); if (!names.length) return toast('Type at least one new name.'), false; c.students.push(...names.map(n => C.newStudent(n))); toast(`Added ${names.length} student${names.length === 1 ? '' : 's'}.`); },
     newclass(f) { const c = C.newClass(f.name.value, C.parseNames(f.names.value)); state.classes.push(c); state.activeClass = c.id; if (c.students.length) ui.tab = 'board'; toast(`${c.name} created.`); },
     signin(f) { signIn(f, false); return false; },
+    pack(f) {
+      const id = f.id.value || undefined, p = C.parsePack(f.text.value, id); if (!p) return toast('A mission needs at least a story or some words.'), false;
+      const i = state.packs.findIndex(x => x.id === p.id); if (i >= 0) state.packs[i] = p; else state.packs.push(p);
+      state = C.normalize(state); closeDlg(); toast(`Saved "${p.title}". Press Start for your class when you are ready.`);
+    },
+    classlogin(f) { openRoster(f.code.value); return false; },
     set(f) {
       const id = f.id.value || undefined, set = C.parseSetText(f.title.value, f.text.value, id); if (!set) return toast('Write at least one line.'), false;
       const i = state.sets.findIndex(x => x.id === id); if (i >= 0) state.sets[i] = set; else state.sets.push(set);
@@ -633,6 +796,8 @@
   dlg.addEventListener('close', () => { endGame(); player = null; });
   dlg.addEventListener('click', e => { if (e.target === dlg && !dlg.classList.contains('player')) closeDlg(); });
   render();
+  // While a teacher is signed in, stars earned on iPads and at home reach the board within a minute.
+  setInterval(async () => { if (!cloud.user || ui.role !== 'teacher' || document.hidden) return; await loadExtras(); if (creditAll() && !dlg.open) render(); }, 60000);
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { /* works without offline support */ });
   if (sb) {
     sb.auth.getSession().then(({ data }) => { if (data.session) startSync(data.session.user); });

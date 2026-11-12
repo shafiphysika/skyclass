@@ -1,6 +1,6 @@
 // Offline support. Network first, so a new deploy shows up straight away; the saved copy is used only when offline.
-const CACHE = 'skyclass-v4';
-const SHELL = ['./', 'index.html', 'style.css', 'core.js', 'sites.js', 'games.js', 'config.js', 'app.js', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = 'skyclass-v5';
+const SHELL = ['./', 'index.html', 'style.css', 'core.js', 'sites.js', 'games.js', 'missions.js', 'config.js', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 const CDN = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
