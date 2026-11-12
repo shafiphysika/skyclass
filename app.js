@@ -15,8 +15,8 @@
   // Online mode is optional: without config.js values (or if the library fails to load) everything stays on this device.
   const cfg = window.SKY_CONFIG || {};
   const sb = window.supabase && cfg.supabaseUrl && cfg.supabaseKey ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
-  const cloud = { user: null, rev: 0, status: '', codes: [] };
-  let fam = null, syncT; // fam: the read-only school a family code unlocked
+  const cloud = { user: null, rev: 0, status: '', codes: [], res: {}, moods: {} };
+  let fam = null, famCode = null, syncT; // fam: the read-only school a family code unlocked; famCode stays in memory only
 
   function saveLocal() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); localStorage.setItem(UIKEY, JSON.stringify(ui)); }
@@ -89,8 +89,8 @@
 
   /* ---------- chrome ---------- */
   const TABS = {
-    teacher: [['board', '⭐', 'Points'], ['attend', '✅', 'Attendance'], ['lessons', '📖', 'Lessons'], ['tools', '🎡', 'Tools'], ['games', '🎮', 'Games'], ['library', '📚', 'Library'], ['sites', '🧭', 'Fun sites'], ['news', '📣', 'News'], ['setup', '⚙️', 'Classes']],
-    student: [['me', '🌟', 'My stars'], ['games', '🎮', 'Games'], ['lessons', '📖', 'Lessons'], ['library', '📚', 'Library'], ['news', '📝', 'Homework']],
+    teacher: [['board', '⭐', 'Points'], ['attend', '✅', 'Attendance'], ['lessons', '📖', 'Lessons'], ['tools', '🎡', 'Tools'], ['games', '🎮', 'Games'], ['practice', '🎯', 'Practice'], ['library', '📚', 'Library'], ['sites', '🧭', 'Fun sites'], ['news', '📣', 'News'], ['setup', '⚙️', 'Classes']],
+    student: [['me', '🌟', 'My stars'], ['practice', '🎯', 'Practice'], ['games', '🎮', 'Games'], ['lessons', '📖', 'Lessons'], ['library', '📚', 'Library'], ['news', '📝', 'Homework']],
     parent: [],
   };
   function render() {
@@ -118,7 +118,8 @@
   /* ---------- teacher ---------- */
   function teacherHTML() {
     const c = cls();
-    if (ui.tab === 'setup' || (!c && !['sites', 'lessons', 'games', 'library'].includes(ui.tab))) return setupHTML(c);
+    if (ui.tab === 'setup' || (!c && !['sites', 'lessons', 'games', 'library', 'practice'].includes(ui.tab))) return setupHTML(c);
+    if (ui.tab === 'practice') return practiceHTML(true);
     if (ui.tab === 'sites') return sitesHTML();
     if (ui.tab === 'games') return gamesHTML();
     if (ui.tab === 'library') return libraryHTML(true);
@@ -145,9 +146,12 @@
   function attendHTML(c) {
     const day = C.today(), rec = c.attendance[day] || {};
     const n = v => c.students.filter(s => rec[s.id] === v).length;
+    const moods = c.students.map(s => [s, moodOf(c, s.id, day)]).filter(x => x[1]), care = moods.filter(x => x[1] <= 2).map(x => x[0].name);
     return `<h2 class="h">Attendance, ${niceDate(Date.now())}</h2>
       <div class="bar"><p><b>${n('p')}</b> present, <b>${n('l')}</b> late, <b>${n('a')}</b> away, <b>${c.students.length - n('p') - n('l') - n('a')}</b> not marked</p><button class="pill" data-act="allhere">Mark everyone present</button></div>
-      <div class="rows">${c.students.map(s => `<div class="row">${avatar(s)}<span class="nm">${esc(s.name)}</span><span class="seg">
+      <section class="panel moodbar"><div><h3>Morning check-in</h3><p>${moods.length} of ${c.students.length} checked in today${moods.length ? ': ' + [5, 4, 3, 2, 1].map(v => `${C.MOODS[v][0]} ${moods.filter(x => x[1] === v).length}`).join('  ') : '.'}</p>
+        ${care.length ? `<p class="care">💛 Check on: ${care.map(esc).join(', ')}</p>` : ''}</div><button class="btn" data-act="kiosk">Open check-in for the class</button></section>
+      <div class="rows">${c.students.map(s => `<div class="row">${avatar(s)}<span class="nm">${esc(s.name)}</span>${moodOf(c, s.id, day) ? `<span class="mood" title="${C.MOODS[moodOf(c, s.id, day)][1]}">${C.MOODS[moodOf(c, s.id, day)][0]}</span>` : ''}<span class="seg">
         ${[['p', 'Present'], ['l', 'Late'], ['a', 'Away']].map(([v, l]) => `<button data-act="mark" data-sid="${esc(s.id)}" data-v="${v}" class="m-${v}" aria-pressed="${rec[s.id] === v}">${l}</button>`).join('')}</span></div>`).join('')}</div>`;
   }
   function lessonsHTML(teacher) {
@@ -166,7 +170,49 @@
         <div class="chips">${[1, 2, 5, 10, 15].map(m => `<button data-act="tset" data-m="${m}">${m} min</button>`).join('')}</div>
         <div class="chips"><button class="btn" data-act="tgo" id="tgo">Start</button><button class="pill" data-act="treset">Reset</button></div></section>
       <section class="panel"><h2 class="h">Group maker</h2><form data-form="groups" class="inline"><label>Groups <input type="number" name="n" min="2" max="12" value="4"></label><button class="btn">Make groups</button></form><div id="groupsout" class="groups"></div></section>
-      <section class="panel"><h2 class="h">Dice</h2><div id="dice" class="dice"><span>⚄</span><span>⚂</span></div><button class="btn" data-act="roll">Roll</button></section></div>`;
+      <section class="panel"><h2 class="h">Dice</h2><div id="dice" class="dice"><span>⚄</span><span>⚂</span></div><button class="btn" data-act="roll">Roll</button></section>
+      ${raceHTML(c)}</div>`;
+  }
+  const RACE_COLORS = [190, 320, 45, 140, 265, 15];
+  const raceOf = c => c.race || { teams: [{ name: 'Rockets', score: 0 }, { name: 'Comets', score: 0 }], target: 20 };
+  function raceHTML(c) {
+    const r = raceOf(c), lead = Math.max(...r.teams.map(t => t.score));
+    return `<section class="panel race" id="race"><h2 class="h">Team race</h2><p>Give teams points for answers, teamwork or tidy desks. First rocket to reach the planet wins.</p>
+      <div class="lanes">${r.teams.map((t, i) => `<div class="lane" style="--h:${RACE_COLORS[i]}"><b class="tname">${esc(t.name)}</b>
+        <div class="track"><span class="rk" style="left:calc(${Math.min(1, t.score / r.target)} * (100% - 2.6rem))">🚀</span><span class="goalp">🪐</span></div>
+        <b class="tscore">${t.score}${t.score === lead && lead > 0 ? ' 👑' : ''}</b><button class="pill" data-act="race" data-i="${i}" data-d="-1" aria-label="Take a point from ${esc(t.name)}">−</button><button class="btn" data-act="race" data-i="${i}" data-d="1" aria-label="Give ${esc(t.name)} a point">+1</button></div>`).join('')}</div>
+      <div class="raceq" id="raceq">${S().sets.length ? `<label>Question from <select id="raceset">${S().sets.map(s => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join('')}</select></label><button class="pill" data-act="raceask">Ask a question</button><div id="raceout" aria-live="polite"></div>` : ''}</div>
+      <form class="inline" data-form="race"><label>Teams<input name="names" value="${esc(r.teams.map(t => t.name).join(', '))}" maxlength="140" placeholder="Rockets, Comets, Stars"></label><label>Points to win<input type="number" name="target" min="5" max="999" value="${r.target}"></label><button class="pill">Save teams</button><button type="button" class="pill" data-act="racereset">Reset scores</button></form></section>`;
+  }
+
+  /* ---------- practice: question sets, assignments and results ---------- */
+  const GAME = id => SkyGames.setGames.find(g => g.id === id);
+  const setById = id => S().sets.find(s => s.id === id);
+  const resultFor = (c, aid, sid) => C.mergeResult((c.results[aid] || {})[sid], cloud.res[`${c.id}|${sid}|${aid}`]);
+  const moodOf = (c, sid, day) => (c.checkin[day] || {})[sid] || cloud.moods[`${c.id}|${sid}|${day}`] || 0;
+  const pct = r => Math.round(r.best / r.total * 100);
+  const gameBtns = (set, aid) => C.setGames(set).map(g => `<button class="pill" data-act="setplay" data-set="${esc(set.id)}" data-game="${g}"${aid ? ` data-assign="${esc(aid)}"` : ''}>${GAME(g).icon} ${GAME(g).title}</button>`).join('');
+  function practiceHTML(teacher) {
+    const c = cls(), s = teacher ? null : student();
+    const todo = c ? c.assign.slice().reverse().map(a => {
+      const set = setById(a.setId), g = GAME(a.game); if (!set) return '';
+      if (teacher) {
+        const played = c.students.filter(st => resultFor(c, a.id, st.id)).length;
+        return `<div class="row"><span class="big sm">${g.icon}</span><span class="nm"><b>${esc(set.title)}</b><small>${g.title}${a.due ? ', due ' + niceDate(a.due + 'T12:00') : ''}</small></span><span class="done">${played} of ${c.students.length} played</span>
+          <button class="pill" data-act="results" data-id="${esc(a.id)}">Results</button><button class="x" data-act="unassign" data-id="${esc(a.id)}" aria-label="Remove this assignment">✕</button></div>`;
+      }
+      const r = resultFor(c, a.id, s.id);
+      return `<div class="row"><span class="big sm">${g.icon}</span><span class="nm"><b>${esc(set.title)}</b><small>${g.title}${a.due ? ', due ' + niceDate(a.due + 'T12:00') : ''}</small></span><span class="done ${r ? (pct(r) >= 80 ? 'ok' : '') : 'new'}">${r ? `Best ${r.best} of ${r.total}` : 'Not started'}</span>
+        <button class="btn" data-act="setplay" data-set="${esc(set.id)}" data-game="${a.game}" data-assign="${esc(a.id)}">${r ? 'Play again' : 'Start'}</button></div>`;
+    }).join('') : '';
+    const sets = S().sets.map((set, i) => `<article class="lesson setcard" style="--h:${hash(set.title) % 360};--i:${i}"><h3>${esc(set.title)}</h3><p>${set.items.length} item${set.items.length === 1 ? '' : 's'}</p>
+      <div class="chips">${gameBtns(set)}</div>
+      ${teacher ? `<div class="chips">${c ? `<button class="btn" data-act="assign" data-set="${esc(set.id)}">Assign to ${esc(c.name)}</button>` : ''}<button class="pill" data-act="print" data-set="${esc(set.id)}">🖨️ Worksheet</button><button class="pill" data-act="editset" data-set="${esc(set.id)}">Edit</button></div>
+        <button class="x" data-act="delset" data-set="${esc(set.id)}" aria-label="Delete ${esc(set.title)}">✕</button>` : ''}</article>`).join('');
+    return `<div class="bar"><h2 class="h">${teacher ? 'Practice' : 'My practice'}</h2>${teacher ? `${cloud.user ? '<button class="pill" data-act="refresh">Refresh scores</button>' : ''}<button class="btn" data-act="editset">New question set</button>` : ''}</div>
+      ${c ? `<section class="panel"><h3>${teacher ? `Assigned to ${esc(c.name)}` : 'To do'}</h3>${todo ? `<div class="rows">${todo}</div>` : `<p class="empty">${teacher ? 'Nothing assigned yet. Pick a set below and press Assign.' : 'No practice set for you yet.'}</p>`}</section>` : ''}
+      <h3 class="h">${teacher ? 'Question sets' : 'Practise anything'}</h3>${teacher ? '<p class="lead">Type one list, play it as flashcards, spelling or a quiz, print it, or send it home.</p>' : ''}
+      <div class="lessons">${sets || '<p class="empty">No question sets yet.</p>'}</div>`;
   }
   function wheelPool(c) { const rec = c.attendance[C.today()] || {}; return c.students.filter(s => rec[s.id] !== 'a'); }
   function wheelHTML(c) {
@@ -254,8 +300,12 @@
     if (ui.tab === 'games') return gamesHTML();
     if (ui.tab === 'library') return libraryHTML(false);
     if (ui.tab === 'news') return `<h2 class="h">Homework and news</h2><div class="posts">${postsHTML(c, false)}</div>`;
-    const next = C.nextBadge(s.points), prev = C.badgesFor(s.points).pop(), base = prev ? prev.at : 0;
-    return `<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
+    if (ui.tab === 'practice') return practiceHTML(false);
+    const next = C.nextBadge(s.points), prev = C.badgesFor(s.points).pop(), base = prev ? prev.at : 0, mood = moodOf(c, s.id, C.today());
+    const checkin = mood ? `<p class="feel">Today you feel ${C.MOODS[mood][0]} ${C.MOODS[mood][1].toLowerCase()}. <button class="linkish" data-act="moodagain">Change</button></p>`
+      : `<section class="panel checkin"><h3>Good morning, ${esc(s.name.split(' ')[0])}! How are you feeling?</h3><div class="moods">${[5, 4, 3, 2, 1].map(v => `<button data-act="mood" data-v="${v}"><span>${C.MOODS[v][0]}</span>${C.MOODS[v][1]}</button>`).join('')}</div></section>`;
+    const due = c.assign.filter(a => setById(a.setId) && !resultFor(c, a.id, s.id)).length;
+    return `${checkin}${due ? `<button class="panel todo" data-act="tab" data-tab="practice">🎯 You have ${due} practice ${due === 1 ? 'mission' : 'missions'} waiting. Let's go!</button>` : ''}<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
         ${next ? `<div class="meter"><i style="width:${Math.round((s.points - base) / (next.at - base) * 100)}%"></i></div><p>${next.at - s.points} more to become a ${next.icon} ${next.label}</p>` : '<p>You have every badge. Sky captain!</p>'}</div>
         <button class="pill" data-act="notme">${fam ? 'Use another code' : 'Not me'}</button></section>
       <div class="badges">${badgesHTML(s.points)}</div>${skyHTML(c, false)}
@@ -270,7 +320,9 @@
       <div class="stats"><div><b>${s.points}</b>stars earned</div><div><b>${rate === null ? 'n/a' : rate + '%'}</b>${rate === null ? 'no attendance recorded yet' : 'attendance'}</div>
         <div><b>${today ? { p: 'Present', l: 'Late', a: 'Away' }[today] : 'n/a'}</b>today</div></div>
       <div class="badges">${badgesHTML(s.points)}</div>
-      <div class="two"><section><h3 class="h">Recent stars</h3>${logHTML(s, 12)}</section><section><h3 class="h">Homework and news</h3><div class="posts">${postsHTML(c, false)}</div></section></div>`;
+      <div class="two"><section><h3 class="h">Recent stars</h3>${logHTML(s, 12)}</section><section><h3 class="h">Homework and news</h3><div class="posts">${postsHTML(c, false)}</div></section></div>
+      <div class="two"><section><h3 class="h">Practice</h3>${c.assign.filter(a => setById(a.setId)).map(a => { const r = resultFor(c, a.id, s.id); return `<div class="row"><span class="big sm">${GAME(a.game).icon}</span><span class="nm"><b>${esc(setById(a.setId).title)}</b><small>${GAME(a.game).title}${a.due ? ', due ' + niceDate(a.due + 'T12:00') : ''}</small></span><span class="done">${r ? `Best ${r.best} of ${r.total}, ${r.tries} ${r.tries === 1 ? 'try' : 'tries'}` : 'Not started'}</span></div>`; }).join('') || '<p class="empty">No practice assigned.</p>'}</section>
+        <section><h3 class="h">Morning check-ins</h3>${(() => { const days = [...Array(7)].map((_, i) => C.today(new Date(Date.now() - i * 864e5))).filter(d => moodOf(c, s.id, d)); return days.length ? `<div class="rows">${days.map(d => `<div class="row"><span class="nm">${niceDate(d + 'T12:00')}</span><span class="mood">${C.MOODS[moodOf(c, s.id, d)][0]}</span>${C.MOODS[moodOf(c, s.id, d)][1]}</div>`).join('')}</div>` : '<p class="empty">No check-ins this week.</p>'; })()}</section></div>`;
   }
 
   /* ---------- lesson player ---------- */
@@ -399,9 +451,9 @@
     backup() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'skyclass', saved: new Date().toISOString(), state })], { type: 'application/json' })); a.download = `skyclass-backup-${C.today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); },
     restore() { pickFile(o => { if (!o || o.app !== 'skyclass' || !o.state) return toast('That is not a Skyclass backup file.'); if (!confirm('Replace everything on this device with the backup?')) return; state = C.normalize(o.state); save(); render(); toast('Backup restored.'); }); },
     who(b) { ui.who = b.dataset.sid; save(); render(); },
-    notme() { ui.who = null; ui.code = null; fam = null; saveLocal(); render(); },
+    notme() { ui.who = null; ui.code = null; fam = null; famCode = null; saveLocal(); render(); },
     signup(b) { signIn(b.form, true); },
-    async signout() { clearTimeout(syncT); await sb.auth.signOut(); cloud.user = null; cloud.codes = []; render(); toast('Signed out. Your classes are still on this device.'); },
+    async signout() { clearTimeout(syncT); await sb.auth.signOut(); cloud.user = null; cloud.codes = []; cloud.res = {}; cloud.moods = {}; render(); toast('Signed out. Your classes are still on this device.'); },
     async makecodes() {
       const c = cls(), rows = c.students.filter(s => !cloud.codes.some(k => k.class_id === c.id && k.student_id === s.id)).map(s => ({ code: newCode(), class_id: c.id, student_id: s.id }));
       if (!rows.length) return toast('Everyone already has a code.');
@@ -414,12 +466,97 @@
       const { error } = await sb.from('sky_codes').insert({ code: newCode(), ...m }); if (error) toast('Code was not made. ' + error.message);
       await loadCodes(); render();
     },
+    setplay(b) {
+      const set = setById(b.dataset.set), g = GAME(b.dataset.game); if (!set || !g) return;
+      const aid = b.dataset.assign, s = ui.role === 'teacher' ? null : student(), c = cls();
+      openDlg(`<div class="phead"><span>${g.icon} ${esc(set.title)}: ${g.title}</span><button class="pill" data-act="closedlg">Close</button></div><div id="game" class="gamebox"></div><span></span>`, 'player');
+      stopGame = SkyGames.startSet(g.id, $('#game'), set, aid && s && c ? (score, total) => saveScore(c, aid, s, score, total) : null);
+    },
+    editset(b) {
+      const set = b.dataset.set ? setById(b.dataset.set) : null;
+      openDlg(`<form data-form="set" class="form"><h2 class="h">${set ? 'Edit question set' : 'New question set'}</h2><input type="hidden" name="id" value="${set ? esc(set.id) : ''}">
+        <label class="wide">Title<input name="title" maxlength="60" required value="${set ? esc(set.title) : ''}" placeholder="Week 3 spelling"></label>
+        <label class="wide">One per line<textarea name="text" rows="12" required placeholder="cat&#10;dog&#10;A pet that says moo | cow&#10;What is 3 + 4? | 7">${set ? esc(C.setText(set)) : ''}</textarea></label>
+        <p class="hint wide">Write a word on its own for spelling, or <b>question | answer</b> for flashcards and quizzes. A quiz needs at least two different answers. Spelling uses the answer when there is one, so <b>A pet that says moo | cow</b> asks the child to spell cow.</p>
+        <button class="btn">Save set</button><button type="button" class="pill" data-act="closedlg">Cancel</button></form>`);
+    },
+    delset(b) { const set = setById(b.dataset.set); if (set && confirm(`Delete "${set.title}"? Practice already assigned from it will be removed too.`)) { state.sets = state.sets.filter(x => x !== set); state = C.normalize(state); save(); render(); } },
+    assign(b) {
+      const set = setById(b.dataset.set), c = cls(); if (!set || !c) return;
+      openDlg(`<form data-form="assign" class="form"><h2 class="h">Assign "${esc(set.title)}" to ${esc(c.name)}</h2><input type="hidden" name="set" value="${esc(set.id)}">
+        <fieldset class="wide gamepick"><legend>Game</legend>${C.setGames(set).map((g, i) => `<label class="check"><input type="radio" name="game" value="${g}" ${i ? '' : 'checked'}> ${GAME(g).icon} ${GAME(g).title}</label>`).join('')}</fieldset>
+        <label>Due date (optional)<input type="date" name="due"></label>
+        <p class="hint wide">Students see it under Practice. At home they need their family code; scores come back to you after they play.</p>
+        <button class="btn">Assign</button><button type="button" class="pill" data-act="closedlg">Cancel</button></form>`);
+    },
+    unassign(b) { const c = cls(); if (confirm('Remove this assignment and its scores from the class?')) { c.assign = c.assign.filter(a => a.id !== b.dataset.id); delete c.results[b.dataset.id]; save(); render(); } },
+    results(b) {
+      const c = cls(), a = c.assign.find(x => x.id === b.dataset.id); if (!a) return;
+      const rows = c.students.map(s => [s, resultFor(c, a.id, s.id)]).sort((x, y) => (y[1] ? pct(y[1]) + 1 : 0) - (x[1] ? pct(x[1]) + 1 : 0));
+      const played = rows.filter(r => r[1]), avg = played.length ? Math.round(played.reduce((n, r) => n + pct(r[1]), 0) / played.length) : null;
+      openDlg(`<div class="phead"><span>${GAME(a.game).icon} ${esc(setById(a.setId).title)}: ${GAME(a.game).title}</span><button class="pill" data-act="closedlg">Close</button></div>
+        <p>${played.length} of ${c.students.length} played${avg === null ? '' : `, class average ${avg}%`}.</p>
+        <div class="rows">${rows.map(([s, r]) => `<div class="row">${avatar(s)}<span class="nm">${esc(s.name)}</span>${r ? `<span class="meter sm"><i style="width:${pct(r)}%"></i></span><span class="done ${pct(r) >= 80 ? 'ok' : ''}">${r.best}/${r.total}</span><small>${r.tries} ${r.tries === 1 ? 'try' : 'tries'}</small>` : '<span class="done new">Not yet</span>'}</div>`).join('')}</div>`);
+    },
+    async refresh() { await loadExtras(); render(); toast('Scores refreshed.'); },
+    print(b) {
+      const set = setById(b.dataset.set), w = set && window.open('', '_blank'); if (!w) return toast('Allow pop-ups for this site to print worksheets.');
+      const items = set.items.slice(0, 40), spell = items.map(C.spellTarget);
+      const line = (it, i) => it.a ? `<li>${esc(it.q)}<span class="blank"></span></li>` : spell[i] ? `<li><span class="mix">${esc(SkyGames.scramble(spell[i]).toUpperCase().split('').join(' '))}</span><span class="blank"></span></li>` : `<li>${esc(it.q)}<span class="blank long"></span></li>`;
+      w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(set.title)}</title><style>body{font:17px/1.6 system-ui,sans-serif;margin:2cm;color:#111}h1{font-size:26px;margin:0 0 4px}.meta{display:flex;gap:3em;margin:10px 0 24px}li{margin:14px 0}.blank{display:inline-block;border-bottom:1.5px solid #333;min-width:9em;margin-left:1em}.blank.long{display:block;min-width:100%;margin:22px 0 0}.mix{letter-spacing:.15em;font-weight:700}.key{page-break-before:always}.key li{margin:4px 0}@media print{button{display:none}}</style>
+        <button onclick="print()">Print</button><h1>${esc(set.title)}</h1><div class="meta"><span>Name: ________________</span><span>Date: ____________</span></div>
+        <p>${items.some(it => it.a) ? 'Write the answer on the line.' : 'Unscramble each word and write it on the line.'}</p><ol>${items.map(line).join('')}</ol>
+        <section class="key"><h1>Answer key</h1><ol>${items.map((it, i) => `<li>${esc(it.a || spell[i] || it.q)}</li>`).join('')}</ol></section>`);
+      w.document.close();
+    },
+    kiosk() { paintKiosk(); },
+    kioskpick(b) { const c = cls(), s = c.students.find(x => x.id === b.dataset.sid); if (!s) return;
+      openDlg(`<div class="phead"><span>Morning check-in</span><button class="pill" data-act="kiosk">Back</button></div><div class="slide"><span class="big">${ANIMALS[hash(s.name) % ANIMALS.length]}</span><h2>Hi ${esc(s.name.split(' ')[0])}! How are you feeling?</h2>
+        <div class="moods big">${[5, 4, 3, 2, 1].map(v => `<button data-act="kioskmood" data-sid="${esc(s.id)}" data-v="${v}"><span>${C.MOODS[v][0]}</span>${C.MOODS[v][1]}</button>`).join('')}</div></div><span></span>`, 'player'); },
+    kioskmood(b) { const c = cls(), day = C.today(); (c.checkin[day] = c.checkin[day] || {})[b.dataset.sid] = +b.dataset.v; save(); tone(); render(); paintKiosk(); },
+    mood(b) { checkIn(+b.dataset.v); },
+    moodagain() { const c = cls(), s = student(), day = C.today(); if (c.checkin[day]) delete c.checkin[day][s.id]; delete cloud.moods[`${c.id}|${s.id}|${day}`]; render(); },
+    race(b) {
+      const c = cls(), r = c.race = raceOf(c), t = r.teams[+b.dataset.i]; if (!t) return;
+      const before = t.score; t.score = Math.max(0, Math.min(9999, t.score + +b.dataset.d));
+      if (before < r.target && t.score >= r.target) { party(); toast(`${t.name} reached the planet!`); }
+      save(); const box = $('#race'); if (box) box.outerHTML = raceHTML(c); if (+b.dataset.d > 0) burst($(`#race .lane:nth-child(${+b.dataset.i + 1}) .rk`), '✨');
+    },
+    racereset() { const c = cls(); c.race = raceOf(c); c.race.teams.forEach(t => { t.score = 0; }); save(); $('#race').outerHTML = raceHTML(c); },
+    raceask() { const set = setById($('#raceset').value); if (!set) return; const it = set.items[Math.floor(Math.random() * set.items.length)];
+      $('#raceout').innerHTML = `<p class="g-clue">${esc(it.q)}</p>${it.a ? `<button class="pill" data-act="racereveal" data-a="${esc(it.a)}">Show answer</button>` : ''}`; },
+    racereveal(b) { b.outerHTML = `<p class="answer">${esc(b.dataset.a)}</p>`; },
     copycode(b) { navigator.clipboard.writeText(b.dataset.code).then(() => toast('Code copied.'), () => toast('Copy did not work. Select the code and copy it by hand.')); },
   };
 
   /* ---------- online: teacher account, saving, family codes ---------- */
   function setStatus(t) { cloud.status = t; const el = $('#sync'); if (el) el.textContent = t; }
   const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+  async function loadExtras() {
+    if (!cloud.user) return;
+    const since = C.today(new Date(Date.now() - 14 * 864e5));
+    const [r, m] = await Promise.all([sb.from('sky_results').select('class_id,student_id,assign_id,best,total,tries,updated_at'), sb.from('sky_checkins').select('class_id,student_id,day,mood').gte('day', since)]);
+    cloud.res = {}; (r.data || []).forEach(x => { cloud.res[`${x.class_id}|${x.student_id}|${x.assign_id}`] = { best: x.best, total: x.total, tries: x.tries, t: Date.parse(x.updated_at) || 0 }; });
+    cloud.moods = {}; (m.data || []).forEach(x => { cloud.moods[`${x.class_id}|${x.student_id}|${x.day}`] = x.mood; });
+  }
+  async function saveScore(c, aid, s, score, total) {
+    if (fam) {
+      const { data } = await sb.rpc('sky_family_play', { p_code: famCode, p_assign: aid, p_score: score, p_total: total });
+      if (!data) return toast('Your score could not be sent. Check your connection and play again.');
+    }
+    C.recordResult(c, aid, s.id, score, total); if (!fam) save(); render(); toast(fam ? 'Score sent to your teacher.' : 'Score saved.');
+  }
+  async function checkIn(v) {
+    const c = cls(), s = student(), day = C.today(); if (!c || !s) return;
+    if (fam) { const { data } = await sb.rpc('sky_family_checkin', { p_code: famCode, p_day: day, p_mood: v }); if (!data) return toast('Your check-in could not be sent. Try again.'); }
+    (c.checkin[day] = c.checkin[day] || {})[s.id] = v; if (!fam) save(); render(); toast('Thanks for checking in!');
+  }
+  function paintKiosk() {
+    const c = cls(), day = C.today();
+    openDlg(`<div class="phead"><span>Morning check-in: tap your name</span><button class="pill" data-act="closedlg">Done</button></div>
+      <div class="cards kiosk">${c.students.map(s => { const m = moodOf(c, s.id, day); return `<div class="card"><button class="give${m ? ' did' : ''}" data-act="kioskpick" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span>${m ? `<span class="mood">${C.MOODS[m][0]}</span>` : ''}</button></div>`; }).join('')}</div><span></span>`, 'player');
+  }
+  function tone() { try { const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain(); o.frequency.value = 784; g.gain.value = .12; o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime + .15); } catch { /* sound is optional */ } }
   async function loadCodes() { const { data } = await sb.from('sky_codes').select('code,class_id,student_id'); cloud.codes = data || []; }
   async function push() {
     if (!cloud.user) return;
@@ -439,7 +576,7 @@
   async function startSync(user) {
     cloud.user = user;
     if (ui.owner === user.id && ui.dirty) { cloud.rev = ui.rev || 0; await push(); } else await pull(); // unsent edits from this device go up first
-    if (cloud.user) await loadCodes();
+    if (cloud.user) { await loadCodes(); await loadExtras(); }
     render();
   }
   async function signIn(f, create) {
@@ -454,9 +591,14 @@
   async function openFamily(code, quiet, keep = true) {
     const { data, error } = await sb.rpc('sky_family_view', { p_code: code });
     if (error) { if (!quiet) toast('Could not reach the class. Check your connection and try again.'); return; }
-    if (data) fam = C.normalize({ classes: [{ ...data.class, students: [data.student] }], lessons: data.lessons, lib: data.lib });
-    if (!data || !fam.classes[0] || !fam.classes[0].students[0]) { ui.code = null; fam = null; saveLocal(); render(); return toast('That code did not work. Check it with your teacher.'); }
-    fam.classes[0].total = data.class.total; ui.code = keep ? code : null; saveLocal(); render();
+    if (data) {
+      const sid = data.student && data.student.id, results = {}, checkin = {};
+      for (const a of data.assign || []) { const r = C.mergeResult(data.localResults && data.localResults[a.id], data.homeResults && data.homeResults[a.id]); if (r) results[a.id] = { [sid]: r }; }
+      for (const src of [data.localCheckins || {}, data.homeCheckins || {}]) for (const [d, v] of Object.entries(src)) if (v) checkin[d] = { [sid]: v };
+      fam = C.normalize({ classes: [{ ...data.class, students: [data.student], assign: data.assign, results, checkin }], lessons: data.lessons, lib: data.lib, sets: data.sets });
+    }
+    if (!data || !fam.classes[0] || !fam.classes[0].students[0]) { ui.code = null; fam = null; famCode = null; saveLocal(); render(); return toast('That code did not work. Check it with your teacher.'); }
+    fam.classes[0].total = data.class.total; famCode = code; ui.code = keep ? code : null; saveLocal(); render();
   }
   function afterAward(c) { const won = C.classTotal(c) >= c.goal.target; if (won && !wonAt[c.id]) { party(); toast(`Goal reached: ${c.goal.reward}!`); } wonAt[c.id] = won; save(); refreshSky(c); const u = app.querySelector('[data-act="undo"]'); if (u) u.disabled = !last; }
 
@@ -469,6 +611,15 @@
     addstudents(f) { const c = cls(), have = new Set(c.students.map(s => s.name.toLowerCase())), names = C.parseNames(f.names.value).filter(n => !have.has(n.toLowerCase())); if (!names.length) return toast('Type at least one new name.'), false; c.students.push(...names.map(n => C.newStudent(n))); toast(`Added ${names.length} student${names.length === 1 ? '' : 's'}.`); },
     newclass(f) { const c = C.newClass(f.name.value, C.parseNames(f.names.value)); state.classes.push(c); state.activeClass = c.id; if (c.students.length) ui.tab = 'board'; toast(`${c.name} created.`); },
     signin(f) { signIn(f, false); return false; },
+    set(f) {
+      const id = f.id.value || undefined, set = C.parseSetText(f.title.value, f.text.value, id); if (!set) return toast('Write at least one line.'), false;
+      const i = state.sets.findIndex(x => x.id === id); if (i >= 0) state.sets[i] = set; else state.sets.push(set);
+      state = C.normalize(state); closeDlg(); toast(`Saved "${set.title}" with ${set.items.length} items.`);
+    },
+    assign(f) { const c = cls(); c.assign.push({ id: C.uid(), setId: f.set.value, game: f.game.value, due: f.due.value, t: Date.now() }); state = C.normalize(state); closeDlg(); toast('Assigned. Students will see it under Practice.'); },
+    race(f) { const c = cls(), old = raceOf(c), names = f.names.value.split(',').map(x => x.trim()).filter(Boolean).slice(0, 6);
+      if (names.length < 2) return toast('Write at least two team names, separated by commas.'), false;
+      c.race = { teams: names.map(n => ({ name: n, score: (old.teams.find(t => t.name === n) || {}).score || 0 })), target: +f.target.value }; state = C.normalize(state); toast('Teams saved.'); },
     librepo(f) { libSync(f.repo.value); return false; },
     libdrive(f) { const id = C.driveId(f.drive.value); if (f.drive.value.trim() && !id) return toast('That does not look like a Drive folder link. Copy it from the folder\'s Share button.'), false; state.lib.drive = id; toast(id ? 'Drive folder saved.' : 'Drive folder removed.'); },
     famcode(f) { openFamily(f.code.value.trim().toUpperCase(), false, f.keep.checked); return false; },
@@ -482,6 +633,7 @@
   dlg.addEventListener('close', () => { endGame(); player = null; });
   dlg.addEventListener('click', e => { if (e.target === dlg && !dlg.classList.contains('player')) closeDlg(); });
   render();
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { /* works without offline support */ });
   if (sb) {
     sb.auth.getSession().then(({ data }) => { if (data.session) startSync(data.session.user); });
     if (ui.code && ui.role && ui.role !== 'teacher') openFamily(ui.code, true);

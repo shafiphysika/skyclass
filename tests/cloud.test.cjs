@@ -11,6 +11,8 @@ const school = {
     id: 'c1', name: '4 Blue', goal: { target: 300, reward: 'Picnic' },
     students: [{ id: 's1', name: 'Ali', points: 12, log: [] }, { id: 's2', name: 'Sara', points: 30, log: [] }],
     attendance: { '2026-11-10': { s1: 'p', s2: 'a' }, '2026-11-11': { s2: 'p' } },
+    assign: [{ id: 'a1', setId: 'set1', game: 'quiz' }], results: { a1: { s1: { best: 2, total: 5, tries: 1 }, s2: { best: 5, total: 5, tries: 1 } } },
+    checkin: { '2026-11-10': { s1: 4, s2: 1 } },
     posts: [{ id: 'p1', kind: 'news', text: 'Trip on Friday', t: 1 }],
   }],
   lessons: [{ id: 'l1', title: 'Water', slides: [{ type: 'info', title: 'Rain' }] }],
@@ -60,6 +62,39 @@ test('teachers are isolated, saves are revision-checked, family codes show one c
     assert.equal(v.lib.items[0].path, 'x.pptx');
     assert.ok(!JSON.stringify(v).includes('Sara'), 'no other child leaks');
     assert.ok(!('students' in v.class));
+
+    // practice and check-ins from home
+    assert.equal(v.assign[0].id, 'a1');
+    assert.deepEqual(v.localResults, { a1: { best: 2, total: 5, tries: 1 } });
+    assert.deepEqual(v.localCheckins, { '2026-11-10': 4 });
+    const play = async (code, a, s, t) => (await q('select public.sky_family_play($1,$2,$3,$4) ok', [code, a, s, t]))[0].ok;
+    assert.equal(await play('WRONGCODE2', 'a1', 3, 5), false);
+    assert.equal(await play('ABCDEFGH23', 'not-assigned', 3, 5), false);
+    assert.equal(await play('ABCDEFGH23', 'a1', 3, 5), true);
+    assert.equal(await play('ABCDEFGH23', 'a1', 1, 5), true, 'a lower score keeps the best');
+    assert.equal(await play('ABCDEFGH23', 'a1', 999, -4), false, 'nonsense is refused');
+    assert.equal(await play('ABCDEFGH23', 'a1', 6, 5), false, 'more than the total is refused');
+    const ci = async (code, day, mood) => (await q('select public.sky_family_checkin($1,$2::date,$3) ok', [code, day, mood]))[0].ok;
+    const today = (await q('select current_date::text d'))[0].d;
+    assert.equal(await ci('ABCDEFGH23', today, 5), true);
+    assert.equal(await ci('ABCDEFGH23', today, 2), true, 'changing your mind replaces it');
+    assert.equal(await ci('ABCDEFGH23', '2020-01-01', 3), false, 'only around today');
+    assert.equal(await ci('ABCDEFGH23', today, 9), false);
+    assert.equal(await ci('WRONGCODE2', today, 3), false);
+    await assert.rejects(q('select * from public.sky_results'), /permission denied/);
+    await assert.rejects(q("insert into public.sky_checkins values ($1,'c1','s2',current_date,5)", [T1]), /permission denied/);
+    const v2 = (await q("select public.sky_family_view('ABCDEFGH23') v"))[0].v;
+    assert.deepEqual(v2.homeResults.a1 && [v2.homeResults.a1.best, v2.homeResults.a1.total, v2.homeResults.a1.tries], [3, 5, 2]);
+    assert.deepEqual(v2.homeCheckins, { [today]: 2 });
+    assert.ok(!JSON.stringify(v2).includes('s2'), 'no other child leaks through results or check-ins');
+
+    await as(T2);
+    assert.equal((await q('select * from public.sky_results')).length, 0, 'other teacher sees no results');
+    assert.equal((await q('select * from public.sky_checkins')).length, 0);
+    await assert.rejects(q("insert into public.sky_results values ($1,'c1','s1','a1',1,1,1,now())", [T2]), /permission denied/);
+    await as(T1);
+    assert.equal((await q('select * from public.sky_results')).length, 1);
+    assert.equal((await q('select mood from public.sky_checkins'))[0].mood, 2);
 
     await as(T1); await q("delete from public.sky_codes where code='ABCDEFGH23'");
     await as(null);

@@ -6,7 +6,7 @@
   const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
   const clip = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
   const int = (v, lo, hi, d) => { v = Math.round(Number(v)); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d; };
-  const today = (d = new Date()) => d.toISOString().slice(0, 10);
+  const today = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; // local date, not UTC
 
   const SKILLS = [
     { id: 'help', label: 'Helping others', icon: '🤝', points: 1 },
@@ -36,9 +36,9 @@
   const newStudent = (name, points = 0) => ({ id: uid(), name: clip(name, MAX_NAME), points: int(points, 0, 1e6, 0), log: [] });
   const newClass = (name, names = []) => ({
     id: uid(), name: clip(name, 40) || 'My class', students: names.map(n => newStudent(n)),
-    attendance: {}, posts: [], goal: { target: 300, reward: 'Game time' },
+    attendance: {}, posts: [], goal: { target: 300, reward: 'Game time' }, assign: [], results: {}, checkin: {}, race: null,
   });
-  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], lib: { repo: '', branch: 'main', items: [], drive: '' }, activeClass: null });
+  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], lib: { repo: '', branch: 'main', items: [], drive: '' }, sets: sampleSets(), activeClass: null });
 
   // Trust boundary: anything loaded from storage or an imported file goes through here.
   function normalize(raw) {
@@ -65,11 +65,30 @@
         text: String((p && p.text) || '').slice(0, MAX_TEXT), due: /^\d{4}-\d{2}-\d{2}$/.test(p && p.due) ? p.due : '', t: int(p && p.t, 0, 9e15, Date.now()),
       })).filter(p => p.text.trim());
       cls.goal = { target: int(c && c.goal && c.goal.target, 10, 100000, 300), reward: clip(c && c.goal && c.goal.reward, 60) || 'Game time' };
+      cls.assign = (Array.isArray(c && c.assign) ? c.assign : []).slice(-30).map(a => a && {
+        id: typeof a.id === 'string' ? clip(a.id, 40) : uid(), setId: clip(a.setId, 40), game: SET_GAME_IDS.includes(a.game) ? a.game : 'flash',
+        due: /^\d{4}-\d{2}-\d{2}$/.test(a.due) ? a.due : '', t: int(a.t, 0, 9e15, Date.now()),
+      }).filter(Boolean);
+      cls.results = {};
+      for (const a of cls.assign) {
+        const m = c && c.results && c.results[a.id]; if (!m || typeof m !== 'object') continue;
+        for (const [sid, r] of Object.entries(m)) if (ids.has(sid) && r) (cls.results[a.id] = cls.results[a.id] || {})[sid] = cleanResult(r);
+      }
+      cls.checkin = {};
+      for (const day of Object.keys((c && c.checkin) || {}).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().slice(-45)) {
+        const m = c.checkin[day]; if (!m || typeof m !== 'object') continue;
+        for (const [sid, v] of Object.entries(m)) if (ids.has(sid) && MOODS[v]) (cls.checkin[day] = cls.checkin[day] || {})[sid] = +v;
+      }
+      const r = c && c.race;
+      cls.race = r && Array.isArray(r.teams) && r.teams.length >= 2 ? { teams: r.teams.slice(0, 6).map((t, i) => ({ name: clip(t && t.name, 20) || 'Team ' + (i + 1), score: int(t && t.score, 0, 9999, 0) })), target: int(r.target, 5, 999, 20) } : null;
       return cls;
     });
     if (Array.isArray(raw.lessons)) s.lessons = raw.lessons.slice(0, 200).map(normalizeLesson).filter(Boolean);
     s.links = (Array.isArray(raw.links) ? raw.links : []).slice(0, 60).map(cleanLink).filter(Boolean);
     s.lib = cleanLib(raw.lib);
+    if (Array.isArray(raw.sets)) s.sets = raw.sets.slice(0, 100).map(normalizeSet).filter(Boolean);
+    const setIds = new Set(s.sets.map(x => x.id));
+    for (const k of s.classes) { k.assign = k.assign.filter(a => setIds.has(a.setId)); for (const id of Object.keys(k.results)) if (!k.assign.some(a => a.id === id)) delete k.results[id]; }
     s.activeClass = s.classes.some(c => c.id === raw.activeClass) ? raw.activeClass : (s.classes[0] ? s.classes[0].id : null);
     return s;
   }
@@ -119,6 +138,48 @@
   function libUrl(repo, branch, item) {
     const p = item.path.split('/').map(encodeURIComponent).join('/'), [o, r] = repo.split('/'), raw = `https://raw.githubusercontent.com/${repo}/${branch}/${p}`;
     return { raw, page: `https://github.com/${repo}/blob/${branch}/${p}`, site: `https://${o.toLowerCase()}.github.io/${r}/${p}`, office: 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(raw) };
+  }
+
+  /* Question sets: one list (spelling words, vocabulary, questions) that every set game can use. */
+  const SET_GAME_IDS = ['flash', 'spell', 'quiz'];
+  const MOODS = { 1: ['😢', 'Sad'], 2: ['😟', 'Worried'], 3: ['😐', 'Okay'], 4: ['🙂', 'Good'], 5: ['😄', 'Great'] };
+  function normalizeSet(x) {
+    if (!x || typeof x !== 'object') return null;
+    const items = (Array.isArray(x.items) ? x.items : []).slice(0, 200).map(it => ({ q: clip(it && it.q, 120), a: clip(it && it.a, 120) })).filter(it => it.q);
+    return items.length ? { id: typeof x.id === 'string' ? clip(x.id, 40) : uid(), title: clip(x.title, 60) || 'Question set', items } : null;
+  }
+  // One item per line. "question | answer" or a single word. Leading "1." or "-" is ignored.
+  function parseSetText(title, text, id) {
+    const items = String(text || '').split('\n').map(l => l.replace(/^\s*(\d+[.)]|[-*•])\s*/, '')).filter(l => l.trim()).map(l => {
+      const i = l.indexOf('|'); return i < 0 ? { q: l, a: '' } : { q: l.slice(0, i), a: l.slice(i + 1) };
+    });
+    return normalizeSet({ id, title, items });
+  }
+  const setText = set => set.items.map(it => it.a ? `${it.q} | ${it.a}` : it.q).join('\n');
+  // Spelling uses the answer when there is one (the question is the clue), otherwise the word itself.
+  const spellTarget = it => { const w = (it.a || it.q).trim(); return /^[A-Za-z]{2,14}$/.test(w) ? w.toLowerCase() : null; };
+  function quizQuestions(set, n = 10, rand = Math.random) {
+    const withA = set.items.filter(it => it.a), answers = [...new Set(withA.map(it => it.a))];
+    if (withA.length < 1 || answers.length < 2) return [];
+    return shuffle(withA, rand).slice(0, n).map(it => ({ q: it.q, answer: it.a, options: shuffle([it.a, ...shuffle(answers.filter(x => x !== it.a), rand).slice(0, 3)], rand) }));
+  }
+  const setGames = set => SET_GAME_IDS.filter(g => g === 'flash' || (g === 'spell' ? set.items.some(spellTarget) : quizQuestions(set, 1).length));
+  const cleanResult = r => { const total = int(r.total, 1, 500, 1); return { best: int(r.best, 0, total, 0), total, tries: int(r.tries, 0, 100000, 0), t: int(r.t, 0, 9e15, 0) }; };
+  function recordResult(cls, assignId, sid, score, total, now = Date.now()) {
+    const m = cls.results[assignId] = cls.results[assignId] || {}, prev = m[sid];
+    const next = cleanResult({ best: score, total, tries: 1, t: now });
+    m[sid] = prev ? mergeResult(prev, next) : next;
+    return m[sid];
+  }
+  // Results from the class device and from families' own devices are separate tries, so tries add up.
+  function mergeResult(a, b) {
+    if (!a) return b || null; if (!b) return a;
+    const top = b.best / b.total > a.best / a.total ? b : a;
+    return { best: top.best, total: top.total, tries: a.tries + b.tries, t: Math.max(a.t, b.t) };
+  }
+  function moodsFor(cls, day) { const m = cls.checkin[day] || {}, out = {}; for (const [sid, v] of Object.entries(m)) out[sid] = v; return out; }
+  function sampleSets() {
+    return [parseSetText('Space words', 'The star our planet goes around | sun\nThe planet we live on | earth\nIt shines in the night sky | moon\nA big ball of rock or gas that goes around a star | planet\nIt carries astronauts into space | rocket\nA person who travels into space | astronaut\nA group of stars that makes a picture | constellation\nA ball of ice and dust with a long tail | comet', 'sample-space')].filter(Boolean);
   }
 
   const SLIDE_TYPES = ['info', 'mcq', 'poll', 'tf'];
@@ -224,6 +285,6 @@
     ].filter(Boolean);
   }
 
-  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, driveId, libUrl, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
+  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, driveId, libUrl, MOODS, SET_GAME_IDS, normalizeSet, parseSetText, setText, spellTarget, quizQuestions, setGames, recordResult, mergeResult, moodsFor, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.SkyCore = api;
 })(this);

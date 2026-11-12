@@ -11,6 +11,14 @@ A classroom site with three views: teacher, student and parent.
 - **Games:** five built-in games for students (maths sprint, memory match, word scramble, colour echo, star catcher). Best scores stay on the device.
 - **Library:** put PowerPoints, PDFs, pictures and HTML games in a public GitHub repository, one folder per subject. In **Library**, enter `owner/name` and press **Sync from GitHub**. Slides open in Microsoft's online viewer (files up to 10 MB; the file address is sent to Microsoft), a folder with `index.html` opens as a game (the repository needs GitHub Pages turned on), and PDFs open on GitHub. Families with a code see the same library.
 
+## Practice, check-in and team race
+
+- **Question sets** (Practice tab): type one list, a word per line for spelling or `question | answer` for flashcards and quizzes. Each set plays as Flashcards, Spelling ship or Quick quiz, prints as a worksheet with an answer key, and can be assigned to a class.
+- **Assignments:** students see them under Practice. On the class device scores save straight away; at home children use their family code and the score is sent to the teacher. Results show best score and number of tries per child.
+- **Morning check-in:** children pick a mood face on My stars, or on the class device through Attendance → Open check-in for the class. The teacher sees the class at a glance and who to check on.
+- **Team race** (Tools): teams race rockets to a planet; ask questions from any set.
+- **Works offline** after the first visit, and can be installed to a phone or tablet home screen.
+
 ## Run it
 
 No build step. Serve the folder and open it:

@@ -22,6 +22,33 @@ create table if not exists public.sky_codes (
   unique (owner, class_id, student_id)
 );
 
+-- Practice scores and morning check-ins sent from families' own devices. Written only through the
+-- sky_family_* functions below; teachers can read and clear their own rows.
+create table if not exists public.sky_results (
+  owner uuid not null references auth.users(id) on delete cascade,
+  class_id text not null check (length(class_id) between 1 and 40),
+  student_id text not null check (length(student_id) between 1 and 40),
+  assign_id text not null check (length(assign_id) between 1 and 40),
+  best integer not null check (best >= 0), total integer not null check (total between 1 and 500), tries integer not null default 1,
+  updated_at timestamptz not null default now(),
+  primary key (owner, class_id, student_id, assign_id), check (best <= total)
+);
+create table if not exists public.sky_checkins (
+  owner uuid not null references auth.users(id) on delete cascade,
+  class_id text not null check (length(class_id) between 1 and 40),
+  student_id text not null check (length(student_id) between 1 and 40),
+  day date not null, mood smallint not null check (mood between 1 and 5),
+  primary key (owner, class_id, student_id, day)
+);
+alter table public.sky_results enable row level security;
+alter table public.sky_checkins enable row level security;
+revoke all on public.sky_results, public.sky_checkins from anon, authenticated;
+grant select, delete on public.sky_results, public.sky_checkins to authenticated;
+drop policy if exists sky_results_own on public.sky_results;
+create policy sky_results_own on public.sky_results for all to authenticated using (owner = (select auth.uid()));
+drop policy if exists sky_checkins_own on public.sky_checkins;
+create policy sky_checkins_own on public.sky_checkins for all to authenticated using (owner = (select auth.uid()));
+
 alter table public.sky_schools enable row level security;
 alter table public.sky_codes enable row level security;
 
@@ -73,8 +100,50 @@ begin
       'total', (select coalesce(sum(greatest(0, (s->>'points')::numeric)), 0) from jsonb_array_elements(cls->'students') s)),
     'student', stu,
     'lessons', coalesce(st->'lessons', '[]'::jsonb),
-    'lib', coalesce(st->'lib', '{}'::jsonb));
+    'lib', coalesce(st->'lib', '{}'::jsonb),
+    'sets', coalesce(st->'sets', '[]'::jsonb),
+    'assign', coalesce(cls->'assign', '[]'::jsonb),
+    -- this child's practice scores and check-ins: from the class device (in the school record) and from home (tables)
+    'localResults', coalesce((select jsonb_object_agg(r.key, r.value->c.student_id) from jsonb_each(case when jsonb_typeof(cls->'results') = 'object' then cls->'results' else '{}'::jsonb end) r where r.value ? c.student_id), '{}'::jsonb),
+    'homeResults', coalesce((select jsonb_object_agg(assign_id, jsonb_build_object('best', best, 'total', total, 'tries', tries, 't', (extract(epoch from updated_at) * 1000)::bigint))
+      from public.sky_results where owner = c.owner and class_id = c.class_id and student_id = c.student_id), '{}'::jsonb),
+    'localCheckins', coalesce((select jsonb_object_agg(d.key, d.value->c.student_id) from jsonb_each(case when jsonb_typeof(cls->'checkin') = 'object' then cls->'checkin' else '{}'::jsonb end) d where d.value ? c.student_id), '{}'::jsonb),
+    'homeCheckins', coalesce((select jsonb_object_agg(day::text, mood) from public.sky_checkins where owner = c.owner and class_id = c.class_id and student_id = c.student_id and day > current_date - 14), '{}'::jsonb));
 end $$;
+
+-- A child playing assigned practice at home. Only assignments that exist for the code's class count.
+create or replace function public.sky_family_play(p_code text, p_assign text, p_score integer, p_total integer) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare c public.sky_codes; cls jsonb; tot integer := p_total;
+begin
+  if p_total is null or p_total not between 1 and 500 or p_score is null or p_score not between 0 and p_total then return false; end if;
+  select * into c from public.sky_codes where code = upper(btrim(coalesce(p_code, '')));
+  if not found then return false; end if;
+  select x into cls from public.sky_schools s, jsonb_array_elements(coalesce(s.state->'classes', '[]'::jsonb)) x where s.owner = c.owner and x->>'id' = c.class_id limit 1;
+  if cls is null or not exists (select 1 from jsonb_array_elements(coalesce(cls->'assign', '[]'::jsonb)) a where a->>'id' = p_assign) then return false; end if;
+  insert into public.sky_results as r (owner, class_id, student_id, assign_id, best, total)
+    values (c.owner, c.class_id, c.student_id, p_assign, least(greatest(coalesce(p_score, 0), 0), tot), tot)
+    on conflict (owner, class_id, student_id, assign_id) do update set
+      best = case when excluded.best::numeric / excluded.total > r.best::numeric / r.total then excluded.best else r.best end,
+      total = case when excluded.best::numeric / excluded.total > r.best::numeric / r.total then excluded.total else r.total end,
+      tries = least(r.tries + 1, 100000), updated_at = now();
+  return true;
+end $$;
+
+-- Morning check-in from home. The day must be today give or take one, to allow for time zones.
+create or replace function public.sky_family_checkin(p_code text, p_day date, p_mood integer) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare c public.sky_codes;
+begin
+  if p_mood is null or p_mood not between 1 and 5 or p_day is null or abs(p_day - current_date) > 1 then return false; end if;
+  select * into c from public.sky_codes where code = upper(btrim(coalesce(p_code, '')));
+  if not found then return false; end if;
+  insert into public.sky_checkins (owner, class_id, student_id, day, mood) values (c.owner, c.class_id, c.student_id, p_day, p_mood)
+    on conflict (owner, class_id, student_id, day) do update set mood = excluded.mood;
+  return true;
+end $$;
+revoke all on function public.sky_family_play(text, text, integer, integer), public.sky_family_checkin(text, date, integer) from public;
+grant execute on function public.sky_family_play(text, text, integer, integer), public.sky_family_checkin(text, date, integer) to anon, authenticated;
 
 revoke all on function public.sky_save(jsonb, integer) from public, anon;
 grant execute on function public.sky_save(jsonb, integer) to authenticated;

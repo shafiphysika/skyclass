@@ -162,6 +162,114 @@
       } },
   ];
 
-  const api = { mathQ, scramble, list: GAMES, best, start(id, el) { const g = GAMES.find(x => x.id === id); const stop = g.run(el, g); return () => { el.onclick = null; stop(); }; } };
+  /* Games that run on a teacher's question set. Each calls done(score, total) once at the end. */
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function say(text) {
+    try { const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; u.rate = .85; speechSynthesis.cancel(); speechSynthesis.speak(u); return true; } catch { return false; }
+  }
+  const canSay = () => typeof speechSynthesis !== 'undefined';
+  function finish(el, icon, score, total, again, done) {
+    const pct = total ? Math.round(score / total * 100) : 0;
+    el.innerHTML = `<div class="g-end"><span class="big">${pct >= 80 ? '🏆' : pct >= 50 ? '🚀' : icon}</span><h2>${score} of ${total}</h2><p>${pct >= 80 ? 'Mission accomplished!' : pct >= 50 ? 'Good flying. Try again to beat it.' : 'Keep practising, cadet.'}</p><button class="btn" data-again>Play again</button></div>`;
+    el.onclick = e => { if (e.target.closest('[data-again]')) again(); };
+    tone(pct >= 80 ? 880 : 520, 300);
+    if (done) done(score, total);
+  }
+  const ROUND = 10;
+  const SET_GAMES = [
+    { id: 'flash', icon: '🃏', title: 'Flashcards', blurb: 'Flip each card. Say the answer before you look.',
+      run(el, set, done) {
+        const play = () => {
+          const deck = shuffle(set.items).slice(0, ROUND), total = deck.length, missed = new Set(); let queue = deck.slice(), right = 0;
+          frame(el, '<div class="g-flip"><button class="g-face" aria-live="polite"></button></div><p class="hint g-tip">Tap the card to flip it.</p><div class="g-row g-acts" hidden><button class="pill" data-k="again">↻ Not yet</button><button class="btn" data-k="got">✓ I knew it</button></div>');
+          el.querySelector('.g-bar').hidden = true;
+          const show = () => {
+            const it = queue[0], face = el.querySelector('.g-face');
+            face.classList.remove('back'); face.innerHTML = `<span>${esc(it.q)}</span>`; el.querySelector('.g-acts').hidden = true;
+            el.querySelector('.g-tip').textContent = it.a ? 'Tap the card to see the answer.' : 'Read it aloud, then tap the card.';
+          };
+          el.onclick = e => {
+            const it = queue[0];
+            if (e.target.closest('.g-face')) {
+              const face = el.querySelector('.g-face'); face.classList.add('back');
+              face.innerHTML = `<span>${esc(it.a || it.q)}</span>${canSay() ? '<i class="g-say" data-say>🔊</i>' : ''}`; el.querySelector('.g-acts').hidden = false; tone(600, 60);
+              if (e.target.closest('[data-say]')) say(it.a || it.q);
+              return;
+            }
+            const k = e.target.closest('[data-k]'); if (!k) return;
+            queue.shift();
+            if (k.dataset.k === 'got') { if (!missed.has(it)) right++; tone(780, 120); } else { missed.add(it); queue.push(it); tone(300, 120); }
+            el.querySelector('.g-score').textContent = `${right} / ${total}`;
+            queue.length ? show() : finish(el, '🃏', right, total, play, done);
+          };
+          show();
+        };
+        play(); return () => {};
+      } },
+    { id: 'spell', icon: '🛠️', title: 'Spelling ship', blurb: 'Tap the letters in order. Every word you spell repairs the ship.',
+      run(el, set, done) {
+        const C = root.SkyCore || require('./core.js'); let t;
+        const play = () => {
+          const words = shuffle(set.items.filter(it => C.spellTarget(it))).slice(0, ROUND), total = words.length; let n = 0, right = 0, at = 0, slips = 0, word, pool;
+          frame(el, `<div class="g-ship">${words.map(() => '<i></i>').join('')}<span>🚀</span></div><p class="g-clue"></p><div class="g-row"><button class="pill" data-say ${canSay() ? '' : 'hidden'}>🔊 Hear the word</button></div><div class="g-row g-built"></div><div class="g-row g-pool"></div>`);
+          el.querySelector('.g-bar').hidden = true;
+          const draw = () => {
+            el.querySelector('.g-built').innerHTML = [...word].map((ch, i) => i < at ? `<b class="g-tile">${ch.toUpperCase()}</b>` : '<i class="g-slot"></i>').join('');
+            el.querySelector('.g-pool').innerHTML = pool.map((ch, i) => `<button class="g-tile" data-i="${i}">${ch.toUpperCase()}</button>`).join('');
+          };
+          const next = () => {
+            const it = words[n]; word = C.spellTarget(it); at = 0; slips = 0;
+            const extra = shuffle('abcdefghijklmnopqrstuvwxyz'.split('').filter(ch => !word.includes(ch))).slice(0, 2);
+            pool = shuffle([...word, ...extra]);
+            const clue = el.querySelector('.g-clue');
+            if (it.a) clue.textContent = it.q;
+            else { clue.textContent = word.toUpperCase(); clue.classList.add('peek'); clearTimeout(t); t = setTimeout(() => { clue.textContent = 'Spell the word you saw.'; clue.classList.remove('peek'); }, 2500); }
+            if (canSay()) say(word);
+            draw();
+          };
+          el.onclick = e => {
+            if (e.target.closest('[data-say]')) return say(word);
+            const b = e.target.closest('[data-i]'); if (!b) return;
+            const ch = pool[+b.dataset.i];
+            if (ch !== word[at]) { slips++; b.classList.add('wrong'); tone(180, 150); setTimeout(() => b.classList.remove('wrong'), 350); return; }
+            pool.splice(+b.dataset.i, 1); at++; tone(520 + at * 40, 70);
+            if (at < word.length) return draw();
+            draw(); if (slips === 0) right++;
+            el.querySelectorAll('.g-ship i')[n].classList.add(slips === 0 ? 'on' : 'half');
+            el.querySelector('.g-score').textContent = `${right} / ${total}`; tone(880, 160);
+            clearTimeout(t); t = setTimeout(() => (++n < total ? next() : finish(el, '🛠️', right, total, play, done)), 700);
+          };
+          next();
+        };
+        play(); return () => clearTimeout(t);
+      } },
+    { id: 'quiz', icon: '❓', title: 'Quick quiz', blurb: 'Pick the right answer before the timer runs out.',
+      run(el, set, done) {
+        const C = root.SkyCore || require('./core.js'); let t, stop = () => {};
+        const play = () => {
+          const qs = C.quizQuestions(set, ROUND), total = qs.length; let n = 0, right = 0;
+          frame(el, '<p class="g-clue"></p><div class="opts"></div>');
+          const ask = () => {
+            stop(); const q = qs[n];
+            el.querySelector('.g-clue').textContent = q.q;
+            el.querySelector('.opts').innerHTML = q.options.map(o => `<button data-o="${esc(o)}">${esc(o)}</button>`).join('');
+            stop = countdown(el, 20, () => reveal(null));
+          };
+          const reveal = pick => {
+            stop(); const q = qs[n], ok = pick === q.answer; if (ok) right++;
+            el.querySelectorAll('[data-o]').forEach(b => { b.disabled = true; if (b.dataset.o === q.answer) b.classList.add('right'); else if (b.dataset.o === pick) b.classList.add('wrong'); });
+            el.querySelector('.g-score').textContent = `${right} / ${total}`; tone(ok ? 780 : 180, 180);
+            t = setTimeout(() => (++n < total ? ask() : finish(el, '❓', right, total, play, done)), 1100);
+          };
+          el.onclick = e => { const b = e.target.closest('[data-o]'); if (b && !b.disabled) reveal(b.dataset.o); };
+          ask();
+        };
+        play(); return () => { clearTimeout(t); stop(); };
+      } },
+  ];
+
+  const api = { mathQ, scramble, list: GAMES, best, setGames: SET_GAMES, say, canSay,
+    start(id, el) { const g = GAMES.find(x => x.id === id); const stop = g.run(el, g); return () => { el.onclick = null; stop(); }; },
+    startSet(id, el, set, done) { const g = SET_GAMES.find(x => x.id === id); const stop = g.run(el, set, done); /* every finished round counts, so playing again can raise the best */ return () => { el.onclick = null; stop(); try { speechSynthesis.cancel(); } catch { /* no speech */ } }; } };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.SkyGames = api;
 })(this);

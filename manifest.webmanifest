@@ -1,0 +1,14 @@
+{
+  "name": "Skyclass",
+  "short_name": "Skyclass",
+  "description": "Mission control for your class: stars, lessons, practice and games.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#050819",
+  "theme_color": "#050819",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

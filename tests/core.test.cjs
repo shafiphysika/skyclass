@@ -107,3 +107,37 @@ test('games: sums are fair and scrambles differ', () => {
   assert.equal(G.mathQ(1, () => 0).options.length, 4); // a stuck random source must not hang
   assert.notEqual(G.scramble('planet'), 'planet'); assert.notEqual(G.scramble('aab', () => 0.99), 'aab');
 });
+
+test('question sets: parsing, games available, quiz options', () => {
+  const s = C.parseSetText('Mix', '1. The planet we live on | Earth\n- dog\n\n• Red fruit | apple\nNo answer here twice');
+  assert.deepEqual(s.items.map(i => [i.q, i.a]), [['The planet we live on', 'Earth'], ['dog', ''], ['Red fruit', 'apple'], ['No answer here twice', '']]);
+  assert.deepEqual(C.setGames(s), ['flash', 'spell', 'quiz']);
+  assert.deepEqual(s.items.map(C.spellTarget), ['earth', 'dog', 'apple', null]);
+  const q = C.quizQuestions(s, 10);
+  assert.equal(q.length, 2); q.forEach(x => { assert.ok(x.options.includes(x.answer)); assert.equal(new Set(x.options).size, x.options.length); });
+  assert.deepEqual(C.setGames(C.parseSetText('Words', 'cat\ndog')), ['flash', 'spell']);
+  assert.deepEqual(C.setGames(C.parseSetText('Long', 'Explain gravity in your own words')), ['flash']);
+  assert.equal(C.parseSetText('Empty', '\n  \n'), null);
+  assert.equal(C.parseSetText('Round trip', C.setText(s)).items.length, 4);
+  assert.equal(C.emptyState().sets[0].title, 'Space words');
+});
+
+test('assignments, results, check-ins and team race survive normalize safely', () => {
+  const st = C.emptyState(); const c = C.newClass('6A', ['Ali', 'Sara']); st.classes.push(c);
+  const [ali, sara] = c.students.map(s => s.id), setId = st.sets[0].id;
+  c.assign = [{ id: 'a1', setId, game: 'spell', due: '2026-11-20' }, { id: 'gone', setId: 'nope', game: 'quiz' }, { id: 'a2', setId, game: 'hack' }];
+  C.recordResult(c, 'a1', ali, 3, 8, 1); const r = C.recordResult(c, 'a1', ali, 6, 8, 2); C.recordResult(c, 'a1', sara, 99, 8, 3);
+  assert.deepEqual(r, { best: 6, total: 8, tries: 2, t: 2 });
+  c.results.gone = { [ali]: { best: 1, total: 1 } }; c.results.a1.ghost = { best: 1, total: 1 };
+  c.checkin = { '2026-11-12': { [ali]: 5, [sara]: 9, ghost: 1 }, nope: { [ali]: 1 } };
+  c.race = { teams: [{ name: 'Rockets', score: 4 }, { name: '', score: -3 }], target: 1e9 };
+  const n = C.normalize(st).classes[0];
+  assert.deepEqual(n.assign.map(a => [a.id, a.game]), [['a1', 'spell'], ['a2', 'flash']]);
+  assert.deepEqual(Object.keys(n.results), ['a1']); assert.deepEqual(Object.keys(n.results.a1).sort(), [ali, sara].sort());
+  assert.equal(n.results.a1[sara].best, 8, 'score is capped at total');
+  assert.deepEqual(n.checkin, { '2026-11-12': { [ali]: 5 } });
+  assert.deepEqual(n.race, { teams: [{ name: 'Rockets', score: 4 }, { name: 'Team 2', score: 0 }], target: 999 });
+  assert.deepEqual(C.mergeResult({ best: 2, total: 4, tries: 1, t: 1 }, { best: 9, total: 10, tries: 3, t: 5 }), { best: 9, total: 10, tries: 4, t: 5 });
+  assert.equal(C.mergeResult(null, null), null);
+  assert.equal(C.normalize({ sets: [{ title: 'x', items: [] }] }).sets.length, 0);
+});
