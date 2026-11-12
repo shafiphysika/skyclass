@@ -195,3 +195,4 @@ a.site:hover, .site.mine:hover { border-color: var(--ink); transform: translateY
 @media (max-width: 480px) { .brand { font-size: 1.2rem; } #top .pick select { max-width: 8.5rem; } #top .pill { padding: .35rem .7rem; font-size: .9rem; } }
 code { font: 800 1.05rem/1 ui-monospace, Consolas, monospace; letter-spacing: .08em; background: var(--paper); border-radius: 10px; padding: .35rem .6rem; user-select: all; }
 .row .pill { padding: .25rem .8rem; font-size: .9rem; }
+label.check { display: flex; gap: .5rem; align-items: center; font-weight: 500; } label.check input { width: auto; }

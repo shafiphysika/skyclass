@@ -196,7 +196,7 @@
 
   /* ---------- student and parent ---------- */
   function whoHTML(title) {
-    const codeForm = sb ? '<form class="panel form" data-form="famcode"><h2 class="h">Enter your family code</h2><label>Code from your teacher<input name="code" maxlength="12" autocomplete="off" autocapitalize="characters" required placeholder="ABCDE23456"></label><button class="btn">Open</button></form>' : '';
+    const codeForm = sb ? '<form class="panel form" data-form="famcode"><h2 class="h">Enter your family code</h2><label>Code from your teacher<input name="code" maxlength="12" autocomplete="off" autocapitalize="characters" required placeholder="ABCDE23456"></label><label class="check wide"><input type="checkbox" name="keep"> Remember the code on this device. Only tick this on your own phone or computer.</label><button class="btn">Open</button></form>' : '';
     if (!state.classes.length) return codeForm || '<p class="empty">Your teacher has not set up a class on this device yet.</p>';
     const c = cls();
     return `${codeForm}<h2 class="h">${codeForm ? 'Or, on the class device: ' : ''}${title}</h2><label class="pick block">Class <select data-change="class">${state.classes.map(k => `<option value="${esc(k.id)}" ${k.id === c.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
@@ -388,12 +388,13 @@
     if (!data.session) return toast('Account created. Open the confirmation email, then sign in here.');
     await startSync(data.session.user); toast('Signed in.');
   }
-  async function openFamily(code, quiet) {
+  // keep=false leaves the code in memory only, so a shared computer forgets it when the page closes.
+  async function openFamily(code, quiet, keep = true) {
     const { data, error } = await sb.rpc('sky_family_view', { p_code: code });
     if (error) { if (!quiet) toast('Could not reach the class. Check your connection and try again.'); return; }
     if (data) fam = C.normalize({ classes: [{ ...data.class, students: [data.student] }], lessons: data.lessons });
     if (!data || !fam.classes[0] || !fam.classes[0].students[0]) { ui.code = null; fam = null; saveLocal(); render(); return toast('That code did not work. Check it with your teacher.'); }
-    fam.classes[0].total = data.class.total; ui.code = code; saveLocal(); render();
+    fam.classes[0].total = data.class.total; ui.code = keep ? code : null; saveLocal(); render();
   }
   function afterAward(c) { save(); refreshSky(c); const u = app.querySelector('[data-act="undo"]'); if (u) u.disabled = !last; }
 
@@ -406,7 +407,7 @@
     addstudents(f) { const c = cls(), have = new Set(c.students.map(s => s.name.toLowerCase())), names = C.parseNames(f.names.value).filter(n => !have.has(n.toLowerCase())); if (!names.length) return toast('Type at least one new name.'), false; c.students.push(...names.map(n => C.newStudent(n))); toast(`Added ${names.length} student${names.length === 1 ? '' : 's'}.`); },
     newclass(f) { const c = C.newClass(f.name.value, C.parseNames(f.names.value)); state.classes.push(c); state.activeClass = c.id; if (c.students.length) ui.tab = 'board'; toast(`${c.name} created.`); },
     signin(f) { signIn(f, false); return false; },
-    famcode(f) { openFamily(f.code.value.trim().toUpperCase(), false); return false; },
+    famcode(f) { openFamily(f.code.value.trim().toUpperCase(), false, f.keep.checked); return false; },
     groups(f) { const c = cls(), g = C.makeGroups(wheelPool(c).map(s => s.name), +f.n.value); $('#groupsout').innerHTML = g.map((m, i) => `<div style="--h:${i * 55 % 360}"><b>Group ${i + 1}</b>${m.map(esc).join('<br>')}</div>`).join(''); return false; },
   };
 
