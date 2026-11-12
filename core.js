@@ -122,7 +122,8 @@
     if (d) { st.log.push({ t: now, d, r: clip(reason, 60) }); if (st.log.length > MAX_LOG) st.log.splice(0, st.log.length - MAX_LOG); }
     return d;
   }
-  const classTotal = cls => cls.students.reduce((a, s) => a + s.points, 0);
+  // A family view carries only one child, so the server sends the class total alongside.
+  const classTotal = cls => Number.isFinite(cls.total) ? cls.total : cls.students.reduce((a, s) => a + s.points, 0);
   const badgesFor = pts => BADGES.filter(b => pts >= b.at);
   const nextBadge = pts => BADGES.find(b => pts < b.at) || null;
 

@@ -12,12 +12,25 @@ No build step. Serve the folder and open it:
 
 ```sh
 npm start        # http://127.0.0.1:8766
-npm test         # data logic tests
+npm install      # once, for the test database
+npm test         # data logic and database access tests
 ```
 
 ## Where data lives
 
-Everything is saved in this browser only (`localStorage`). There are no accounts yet, so the student and parent views show data only on the device the teacher uses, and anyone holding that device can open any view. Use **Classes → Download backup** before clearing browser data.
+Without online accounts, everything is saved in this browser only (`localStorage`), and anyone holding the device can open any view.
+
+## Online accounts (optional)
+
+With a Supabase project connected, a teacher signs in under **Classes** and the school is saved online. The teacher then makes a **family code** for each child. On any device, a family chooses Student or Parent and enters the code to see that one child, read-only. A code works like a password; making a new one switches the old one off.
+
+Setup:
+
+1. Run `supabase/skyclass.sql` in the project's SQL editor. It only adds `sky_` tables and functions.
+2. Put the project URL and the publishable key in `config.js`. Never a service-role key.
+3. Add the site address to the project's allowed Auth redirect URLs.
+
+Limits: one teacher account owns one school, with no sharing between teachers yet. If two devices edit at once, the first save wins and the other reloads. Lessons sent to families include quiz answers, because quizzes are practice, not grades.
 
 **Classes → Bring in your ClassGrove classes** copies class lists and points from ClassGrove (point-party), either from this device or from a ClassGrove backup file. It only reads; ClassGrove is never changed.
 

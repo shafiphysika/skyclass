@@ -11,12 +11,20 @@
   let last = null, wheelUsed = {}, wheelRot = 0, wheelPick = null, player = null;
   const timer = { left: 300, total: 300, end: 0, tick: null };
 
-  function save() {
+  // Online mode is optional: without config.js values (or if the library fails to load) everything stays on this device.
+  const cfg = window.SKY_CONFIG || {};
+  const sb = window.supabase && cfg.supabaseUrl && cfg.supabaseKey ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
+  const cloud = { user: null, rev: 0, status: '', codes: [] };
+  let fam = null, syncT; // fam: the read-only school a family code unlocked
+
+  function saveLocal() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); localStorage.setItem(UIKEY, JSON.stringify(ui)); }
     catch { toast('This device is out of storage. Download a backup from Classes now.'); }
   }
-  const cls = () => state.classes.find(c => c.id === state.activeClass) || null;
-  const student = () => { const c = cls(); return c ? c.students.find(s => s.id === ui.who) || null : null; };
+  function save() { if (cloud.user) ui.dirty = true; saveLocal(); if (cloud.user) { setStatus('Saving…'); clearTimeout(syncT); syncT = setTimeout(push, 1200); } }
+  const S = () => fam && ui.role !== 'teacher' ? fam : state;
+  const cls = () => S().classes.find(c => c.id === S().activeClass) || null;
+  const student = () => { const c = cls(); return !c ? null : S() === fam ? c.students[0] || null : c.students.find(s => s.id === ui.who) || null; };
   const hash = s => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.codePointAt(0)) >>> 0; return h; };
   const ANIMALS = ['🦊', '🐼', '🐯', '🐸', '🦉', '🐙', '🦄', '🐨', '🐧', '🦁', '🐰', '🐢', '🦋', '🐬', '🐝', '🦕'];
   const avatar = st => `<span class="ava" style="--h:${hash(st.id) % 360}">${ANIMALS[hash(st.name) % ANIMALS.length]}</span>`;
@@ -129,7 +137,7 @@
   }
   function lessonsHTML(teacher) {
     return `<div class="bar"><h2 class="h">${teacher ? 'Interactive lessons' : 'Play a lesson'}</h2>${teacher ? '<button class="btn" data-act="newlesson">Write a lesson</button>' : ''}</div>
-      <div class="lessons">${state.lessons.map(l => { const q = l.slides.filter(s => s.type !== 'info').length; return `<article class="lesson" style="--h:${hash(l.title) % 360}">
+      <div class="lessons">${S().lessons.map(l => { const q = l.slides.filter(s => s.type !== 'info').length; return `<article class="lesson" style="--h:${hash(l.title) % 360}">
         <span class="big">${esc(l.slides.find(s => s.emoji)?.emoji || '📖')}</span><h3>${esc(l.title)}</h3>
         <p>${esc(l.subject || 'Lesson')}: ${l.slides.length} slides, ${q} question${q === 1 ? '' : 's'}</p>
         <button class="btn" data-act="play" data-id="${esc(l.id)}">${teacher ? 'Present' : 'Play'}</button>
@@ -172,14 +180,26 @@
       <section class="panel"><h3>Bring in your ClassGrove classes</h3><p>Copies class lists and points. Your ClassGrove site and its data are not changed.</p>
         <div class="chips"><button class="btn" data-act="cglocal">Copy from this device</button><button class="pill" data-act="cgfile">Import a ClassGrove backup file</button></div></section>
       <section class="panel"><h3>Backup</h3><p>Skyclass keeps everything in this browser. Download a backup before clearing browser data or changing devices.</p>
-        <div class="chips"><button class="btn" data-act="backup">Download backup</button><button class="pill" data-act="restore">Restore a backup</button></div></section>`;
+        <div class="chips"><button class="btn" data-act="backup">Download backup</button><button class="pill" data-act="restore">Restore a backup</button></div></section>${accountHTML(c)}`;
+  }
+  function accountHTML(c) {
+    if (!sb) return '<section class="panel"><h3>Online accounts</h3><p>Online saving is not connected on this copy of Skyclass, so everything stays on this device.</p></section>';
+    if (!cloud.user) return `<section class="panel"><h3>Save online and share with families</h3><p>Sign in to keep your classes online and to give each family a code for their own devices.</p>
+      <form data-form="signin" class="form"><label>Email<input type="email" name="email" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" minlength="8" required></label>
+      <button class="btn">Sign in</button><button type="button" class="pill" data-act="signup">Create account</button></form></section>`;
+    const row = s => { const k = cloud.codes.find(x => x.class_id === c.id && x.student_id === s.id);
+      return `<div class="row"><span class="nm">${esc(s.name)}</span>${k ? `<code>${esc(k.code)}</code><button class="pill" data-act="copycode" data-code="${esc(k.code)}">Copy</button>` : ''}<button class="pill" data-act="recode" data-sid="${esc(s.id)}">${k ? 'New code' : 'Make code'}</button></div>`; };
+    return `<section class="panel"><h3>Signed in as ${esc(cloud.user.email)}</h3><p id="sync">${esc(cloud.status)}</p><button class="pill" data-act="signout">Sign out</button></section>
+      ${c && c.students.length ? `<section class="panel"><h3>Family codes for ${esc(c.name)}</h3><p>A code opens one child's stars, attendance, homework and lessons on any device. At ${esc(location.host + location.pathname)} choose Student or Parent, then enter the code. Treat a code like a password. Making a new code switches the old one off.</p>
+        <div class="chips"><button class="btn" data-act="makecodes">Make codes for everyone</button></div><div class="rows">${c.students.map(row).join('')}</div></section>` : ''}`;
   }
 
   /* ---------- student and parent ---------- */
   function whoHTML(title) {
-    if (!state.classes.length) return '<p class="empty">Your teacher has not set up a class on this device yet.</p>';
+    const codeForm = sb ? '<form class="panel form" data-form="famcode"><h2 class="h">Enter your family code</h2><label>Code from your teacher<input name="code" maxlength="12" autocomplete="off" autocapitalize="characters" required placeholder="ABCDE23456"></label><button class="btn">Open</button></form>' : '';
+    if (!state.classes.length) return codeForm || '<p class="empty">Your teacher has not set up a class on this device yet.</p>';
     const c = cls();
-    return `<h2 class="h">${title}</h2><label class="pick block">Class <select data-change="class">${state.classes.map(k => `<option value="${esc(k.id)}" ${k.id === c.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
+    return `${codeForm}<h2 class="h">${codeForm ? 'Or, on the class device: ' : ''}${title}</h2><label class="pick block">Class <select data-change="class">${state.classes.map(k => `<option value="${esc(k.id)}" ${k.id === c.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
       <div class="cards">${c.students.map(s => `<div class="card"><button class="give" data-act="who" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span></button></div>`).join('') || '<p class="empty">No students in this class yet.</p>'}</div>`;
   }
   function studentHTML() {
@@ -190,7 +210,7 @@
     const next = C.nextBadge(s.points), prev = C.badgesFor(s.points).pop(), base = prev ? prev.at : 0;
     return `<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
         ${next ? `<div class="meter"><i style="width:${Math.round((s.points - base) / (next.at - base) * 100)}%"></i></div><p>${next.at - s.points} more to become a ${next.icon} ${next.label}</p>` : '<p>You have every badge. Sky captain!</p>'}</div>
-        <button class="pill" data-act="notme">Not me</button></section>
+        <button class="pill" data-act="notme">${fam ? 'Use another code' : 'Not me'}</button></section>
       <div class="badges">${badgesHTML(s.points)}</div>${skyHTML(c, false)}
       <h3 class="h">Why I got stars</h3>${logHTML(s, 8)}`;
   }
@@ -199,7 +219,7 @@
     const c = cls(), s = student();
     if (!s) return whoHTML('Choose your child');
     const rate = C.attendanceRate(c, s.id), today = (c.attendance[C.today()] || {})[s.id];
-    return `<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p>${esc(c.name)}</p></div><button class="pill" data-act="notme">Choose another child</button></section>
+    return `<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p>${esc(c.name)}</p></div><button class="pill" data-act="notme">${fam ? 'Use another code' : 'Choose another child'}</button></section>
       <div class="stats"><div><b>${s.points}</b>stars earned</div><div><b>${rate === null ? 'n/a' : rate + '%'}</b>${rate === null ? 'no attendance recorded yet' : 'attendance'}</div>
         <div><b>${today ? { p: 'Present', l: 'Late', a: 'Away' }[today] : 'n/a'}</b>today</div></div>
       <div class="badges">${badgesHTML(s.points)}</div>
@@ -265,7 +285,7 @@
   }
   const acts = {
     home() { ui.role = null; render(); },
-    enter(b) { ui.role = b.dataset.role; ui.tab = TABS[ui.role][0] ? TABS[ui.role][0][0] : ''; if (ui.role !== 'teacher') ui.who = null; if (!cls() && state.classes[0]) state.activeClass = state.classes[0].id; save(); render(); },
+    enter(b) { ui.role = b.dataset.role; ui.tab = TABS[ui.role][0] ? TABS[ui.role][0][0] : ''; if (ui.role !== 'teacher') { ui.who = null; if (sb && ui.code) openFamily(ui.code, true); } if (!cls() && state.classes[0]) state.activeClass = state.classes[0].id; save(); render(); },
     tab(b) { ui.tab = b.dataset.tab; save(); render(); scrollTo(0, 0); },
     skill(b) { ui.skill = b.dataset.id; save(); render(); },
     give(b) { const c = cls(), sk = C.SKILLS.find(s => s.id === ui.skill) || C.SKILLS[0], d = give(c, b.dataset.sid, sk.points, sk.label, b); if (d) { last = [[b.dataset.sid, d]]; afterAward(c); } },
@@ -283,7 +303,7 @@
         <button class="btn">Save lesson</button><button type="button" class="pill" data-act="closedlg">Cancel</button></form>`);
     },
     dellesson(b) { if (confirm('Delete this lesson?')) { state.lessons = state.lessons.filter(l => l.id !== b.dataset.id); save(); render(); } },
-    play(b) { const lesson = state.lessons.find(l => l.id === b.dataset.id); if (lesson) { player = { lesson, i: 0, answers: {}, votes: {}, teacher: ui.role === 'teacher' }; paintPlayer(); } },
+    play(b) { const lesson = S().lessons.find(l => l.id === b.dataset.id); if (lesson) { player = { lesson, i: 0, answers: {}, votes: {}, teacher: ui.role === 'teacher' }; paintPlayer(); } },
     pnext() { if (player) { player.i++; paintPlayer(); if (player.i >= player.lesson.slides.length) burst($('.slide.end .big'), '🎉'); } },
     pprev() { if (player && player.i) { player.i--; paintPlayer(); } },
     answer(b) { const k = +b.dataset.k; player.answers[player.i] = k; const ok = k === player.lesson.slides[player.i].answer; paintPlayer(); if (ok) burst($('.opts .right')); },
@@ -317,8 +337,64 @@
     backup() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'skyclass', saved: new Date().toISOString(), state })], { type: 'application/json' })); a.download = `skyclass-backup-${C.today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); },
     restore() { pickFile(o => { if (!o || o.app !== 'skyclass' || !o.state) return toast('That is not a Skyclass backup file.'); if (!confirm('Replace everything on this device with the backup?')) return; state = C.normalize(o.state); save(); render(); toast('Backup restored.'); }); },
     who(b) { ui.who = b.dataset.sid; save(); render(); },
-    notme() { ui.who = null; save(); render(); },
+    notme() { ui.who = null; ui.code = null; fam = null; saveLocal(); render(); },
+    signup(b) { signIn(b.form, true); },
+    async signout() { clearTimeout(syncT); await sb.auth.signOut(); cloud.user = null; cloud.codes = []; render(); toast('Signed out. Your classes are still on this device.'); },
+    async makecodes() {
+      const c = cls(), rows = c.students.filter(s => !cloud.codes.some(k => k.class_id === c.id && k.student_id === s.id)).map(s => ({ code: newCode(), class_id: c.id, student_id: s.id }));
+      if (!rows.length) return toast('Everyone already has a code.');
+      const { error } = await sb.from('sky_codes').insert(rows); if (error) return toast('Codes were not made. ' + error.message);
+      await loadCodes(); render(); toast(`Made ${rows.length} code${rows.length === 1 ? '' : 's'}.`);
+    },
+    async recode(b) {
+      const c = cls(), m = { class_id: c.id, student_id: b.dataset.sid };
+      await sb.from('sky_codes').delete().match(m);
+      const { error } = await sb.from('sky_codes').insert({ code: newCode(), ...m }); if (error) toast('Code was not made. ' + error.message);
+      await loadCodes(); render();
+    },
+    copycode(b) { navigator.clipboard.writeText(b.dataset.code).then(() => toast('Code copied.'), () => toast('Copy did not work. Select the code and copy it by hand.')); },
   };
+
+  /* ---------- online: teacher account, saving, family codes ---------- */
+  function setStatus(t) { cloud.status = t; const el = $('#sync'); if (el) el.textContent = t; }
+  const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+  async function loadCodes() { const { data } = await sb.from('sky_codes').select('code,class_id,student_id'); cloud.codes = data || []; }
+  async function push() {
+    if (!cloud.user) return;
+    const { data, error } = await sb.rpc('sky_save', { p_state: state, p_rev: cloud.rev });
+    if (error) return setStatus('Not saved online yet. Your changes are safe on this device.');
+    // shortcut: no merging. If another device saved first, its copy wins. Upgrade if two teachers ever edit one school at once.
+    if (data === null) { toast('This school was changed on another device. Loading that version.'); return pull(true); }
+    cloud.rev = ui.rev = data; ui.dirty = false; ui.owner = cloud.user.id; saveLocal(); setStatus('Saved online');
+  }
+  async function pull(force) {
+    const { data, error } = await sb.from('sky_schools').select('state,rev').maybeSingle();
+    if (error) return setStatus('Could not reach online storage. Working from this device.');
+    if (!data) { cloud.rev = 0; return push(); } // first sign-in: this device becomes the online copy
+    if (!force && ui.owner !== cloud.user.id && state.classes.length && !confirm('This account already has classes saved online. Replace the classes on this device with them? Cancel keeps this device as it is and signs you out.')) return acts.signout();
+    state = C.normalize(data.state); cloud.rev = ui.rev = data.rev; ui.dirty = false; ui.owner = cloud.user.id; last = null; saveLocal(); setStatus('Saved online'); render();
+  }
+  async function startSync(user) {
+    cloud.user = user;
+    if (ui.owner === user.id && ui.dirty) { cloud.rev = ui.rev || 0; await push(); } else await pull(); // unsent edits from this device go up first
+    if (cloud.user) await loadCodes();
+    render();
+  }
+  async function signIn(f, create) {
+    if (!f.reportValidity()) return;
+    const cred = { email: f.email.value.trim(), password: f.password.value };
+    const { data, error } = create ? await sb.auth.signUp({ ...cred, options: { emailRedirectTo: location.origin + location.pathname } }) : await sb.auth.signInWithPassword(cred);
+    if (error) return toast(error.message);
+    if (!data.session) return toast('Account created. Open the confirmation email, then sign in here.');
+    await startSync(data.session.user); toast('Signed in.');
+  }
+  async function openFamily(code, quiet) {
+    const { data, error } = await sb.rpc('sky_family_view', { p_code: code });
+    if (error) { if (!quiet) toast('Could not reach the class. Check your connection and try again.'); return; }
+    if (data) fam = C.normalize({ classes: [{ ...data.class, students: [data.student] }], lessons: data.lessons });
+    if (!data || !fam.classes[0] || !fam.classes[0].students[0]) { ui.code = null; fam = null; saveLocal(); render(); return toast('That code did not work. Check it with your teacher.'); }
+    fam.classes[0].total = data.class.total; ui.code = code; saveLocal(); render();
+  }
   function afterAward(c) { save(); refreshSky(c); const u = app.querySelector('[data-act="undo"]'); if (u) u.disabled = !last; }
 
   const forms = {
@@ -329,6 +405,8 @@
     rename(f) { cls().name = C.clip(f.name.value, 40) || cls().name; },
     addstudents(f) { const c = cls(), have = new Set(c.students.map(s => s.name.toLowerCase())), names = C.parseNames(f.names.value).filter(n => !have.has(n.toLowerCase())); if (!names.length) return toast('Type at least one new name.'), false; c.students.push(...names.map(n => C.newStudent(n))); toast(`Added ${names.length} student${names.length === 1 ? '' : 's'}.`); },
     newclass(f) { const c = C.newClass(f.name.value, C.parseNames(f.names.value)); state.classes.push(c); state.activeClass = c.id; if (c.students.length) ui.tab = 'board'; toast(`${c.name} created.`); },
+    signin(f) { signIn(f, false); return false; },
+    famcode(f) { openFamily(f.code.value.trim().toUpperCase(), false); return false; },
     groups(f) { const c = cls(), g = C.makeGroups(wheelPool(c).map(s => s.name), +f.n.value); $('#groupsout').innerHTML = g.map((m, i) => `<div style="--h:${i * 55 % 360}"><b>Group ${i + 1}</b>${m.map(esc).join('<br>')}</div>`).join(''); return false; },
   };
 
@@ -339,4 +417,8 @@
   dlg.addEventListener('close', () => { player = null; });
   dlg.addEventListener('click', e => { if (e.target === dlg && !dlg.classList.contains('player')) closeDlg(); });
   render();
+  if (sb) {
+    sb.auth.getSession().then(({ data }) => { if (data.session) startSync(data.session.user); });
+    if (ui.code && ui.role && ui.role !== 'teacher') openFamily(ui.code, true);
+  }
 })();
