@@ -92,6 +92,9 @@ test('library: repo names, game folders and urls', () => {
   assert.equal(C.libUrl('Shafi/sky-lib', 'main', items[2]).site, 'https://shafi.github.io/sky-lib/games/space-race/index.html');
   const lib = C.normalize({ lib: { repo: 'a/b', branch: 'main', items: [{ path: '../x.pptx', kind: 'slides' }, { path: 'ok.pptx', kind: 'slides' }, { path: 'e.exe', kind: 'virus' }] } }).lib;
   assert.deepEqual(lib.items.map(i => i.path), ['ok.pptx']);
+  assert.equal(C.driveId('https://drive.google.com/drive/u/0/folders/1AbC_dEf-GhIjKlMnOp?usp=sharing'), '1AbC_dEf-GhIjKlMnOp');
+  assert.equal(C.driveId('https://evil.example/x'), '');
+  assert.equal(C.normalize({ lib: { drive: '1AbC_dEf-GhIjKlMnOp' } }).lib.drive, '1AbC_dEf-GhIjKlMnOp');
 });
 
 test('games: sums are fair and scrambles differ', () => {

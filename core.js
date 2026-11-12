@@ -38,7 +38,7 @@
     id: uid(), name: clip(name, 40) || 'My class', students: names.map(n => newStudent(n)),
     attendance: {}, posts: [], goal: { target: 300, reward: 'Game time' },
   });
-  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], lib: { repo: '', branch: 'main', items: [] }, activeClass: null });
+  const emptyState = () => ({ v: 1, classes: [], lessons: sampleLessons(), links: [], lib: { repo: '', branch: 'main', items: [], drive: '' }, activeClass: null });
 
   // Trust boundary: anything loaded from storage or an imported file goes through here.
   function normalize(raw) {
@@ -109,7 +109,12 @@
       if (!path || path.length > 300 || /(^|\/)\.\.(\/|$)/.test(path) || !KINDS.includes(it.kind)) return null;
       return { path, kind: it.kind, title: clip(it.title, 80) || path, group: clip(it.group, 40) || 'General', size: int(it.size, 0, 1e10, 0) };
     }).filter(Boolean);
-    return { repo, branch, items };
+    return { repo, branch, items, drive: driveId(l.drive) };
+  }
+  // Accepts a Google Drive folder link or a bare folder id; returns the id or ''.
+  function driveId(v) {
+    const s = String(v || '').trim(), m = s.match(/\/folders\/([A-Za-z0-9_-]{10,80})/) || s.match(/^([A-Za-z0-9_-]{10,80})$/);
+    return m ? m[1] : '';
   }
   function libUrl(repo, branch, item) {
     const p = item.path.split('/').map(encodeURIComponent).join('/'), [o, r] = repo.split('/'), raw = `https://raw.githubusercontent.com/${repo}/${branch}/${p}`;
@@ -219,6 +224,6 @@
     ].filter(Boolean);
   }
 
-  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, libUrl, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
+  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, driveId, libUrl, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.SkyCore = api;
 })(this);

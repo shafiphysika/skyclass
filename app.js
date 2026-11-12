@@ -187,9 +187,12 @@
     const lib = S().lib, groups = {};
     lib.items.forEach(it => (groups[it.group] = groups[it.group] || []).push(it));
     const setup = teacher ? `<form class="panel form" data-form="librepo"><label class="wide">GitHub repository that holds your slides and games<input name="repo" value="${esc(lib.repo)}" placeholder="yourname/skyclass-library" required></label><button class="btn">Sync from GitHub</button>
-      <p class="hint wide">Put PowerPoints, PDFs, pictures and HTML games in a public GitHub repository, one folder per subject, then sync. Sync again after adding files. Everyone can see a public repository, so keep student details out of it.</p></form>` : '';
-    return `<h2 class="h">Library</h2>${setup}${Object.keys(groups).sort().map(g => `<section class="sitegroup"><h3>${esc(g)}</h3><div class="sites">${groups[g].map(it => `<button class="site libitem" data-act="libopen" data-path="${esc(it.path)}"><b>${LIB[it.kind][0]} ${esc(it.title)}</b><small>${LIB[it.kind][1]}${it.size ? ', ' + (it.size / 1e6).toFixed(1) + ' MB' : ''}</small></button>`).join('')}</div></section>`).join('')
-      || `<p class="empty">${teacher ? 'No files yet. Enter your repository above and sync.' : 'Your teacher has not added any files yet.'}</p>`}`;
+      <p class="hint wide">Put PowerPoints, PDFs, pictures and HTML games in a public GitHub repository, one folder per subject, then sync. Sync again after adding files. Everyone can see a public repository, so keep student details out of it.</p></form>
+      <form class="panel form" data-form="libdrive"><label class="wide">Google Drive folder for big slide files<input name="drive" value="${lib.drive ? 'https://drive.google.com/drive/folders/' + esc(lib.drive) : ''}" placeholder="https://drive.google.com/drive/folders/…"></label><button class="btn">Save folder</button>
+      <p class="hint wide">Share the folder as "Anyone with the link: Viewer", then paste its link. Files you add to the folder appear here by themselves. Leave empty to remove it.</p></form>` : '';
+    const drive = lib.drive ? `<section class="sitegroup"><h3>📽️ Slides</h3><iframe class="drive" src="https://drive.google.com/embeddedfolderview?id=${esc(lib.drive)}#grid" title="Slides folder" loading="lazy"></iframe><p class="hint">Tap a file to open it in Google Drive.</p></section>` : '';
+    return `<h2 class="h">Library</h2>${setup}${drive}${Object.keys(groups).sort().map(g => `<section class="sitegroup"><h3>${esc(g)}</h3><div class="sites">${groups[g].map(it => `<button class="site libitem" data-act="libopen" data-path="${esc(it.path)}"><b>${LIB[it.kind][0]} ${esc(it.title)}</b><small>${LIB[it.kind][1]}${it.size ? ', ' + (it.size / 1e6).toFixed(1) + ' MB' : ''}</small></button>`).join('')}</div></section>`).join('')
+      || (drive ? '' : `<p class="empty">${teacher ? 'No files yet. Add a Drive folder or sync a repository above.' : 'Your teacher has not added any files yet.'}</p>`)}`;
   }
   async function libSync(text) {
     const repo = C.cleanRepo(text); if (!repo) return toast('Write the repository as owner/name, for example yourname/skyclass-library.');
@@ -467,6 +470,7 @@
     newclass(f) { const c = C.newClass(f.name.value, C.parseNames(f.names.value)); state.classes.push(c); state.activeClass = c.id; if (c.students.length) ui.tab = 'board'; toast(`${c.name} created.`); },
     signin(f) { signIn(f, false); return false; },
     librepo(f) { libSync(f.repo.value); return false; },
+    libdrive(f) { const id = C.driveId(f.drive.value); if (f.drive.value.trim() && !id) return toast('That does not look like a Drive folder link. Copy it from the folder\'s Share button.'), false; state.lib.drive = id; toast(id ? 'Drive folder saved.' : 'Drive folder removed.'); },
     famcode(f) { openFamily(f.code.value.trim().toUpperCase(), false, f.keep.checked); return false; },
     groups(f) { const c = cls(), g = C.makeGroups(wheelPool(c).map(s => s.name), +f.n.value); $('#groupsout').innerHTML = g.map((m, i) => `<div style="--h:${i * 55 % 360}"><b>Group ${i + 1}</b>${m.map(esc).join('<br>')}</div>`).join(''); return false; },
   };

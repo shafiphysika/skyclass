@@ -293,3 +293,4 @@ body::before { content: ''; position: fixed; inset: 0 -640px 0 0; z-index: -1; p
 .viewer { width: 100%; height: 100%; min-height: 0; border: 3px solid var(--ink); border-radius: 18px; background: #fff; object-fit: contain; }
 .phead a.pill { text-decoration: none; display: inline-block; }
 html { overflow-x: clip; } /* the drifting cloud layer is wider than the page */
+.drive { width: 100%; height: 70vh; border: 2.5px solid var(--ink); border-radius: var(--r); background: #fff; box-shadow: var(--pop); }
