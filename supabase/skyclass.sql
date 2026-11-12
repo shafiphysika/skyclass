@@ -163,16 +163,21 @@ create table if not exists public.sky_pin_fails (
   fails integer not null default 0, since timestamptz not null default now(), primary key (owner, class_id, student_id)
 );
 alter table public.sky_pin_fails add column if not exists locks integer not null default 0;
+alter table public.sky_pin_fails add column if not exists day_fails integer not null default 0;
+alter table public.sky_pin_fails add column if not exists day_since timestamptz not null default now();
 alter table public.sky_class_logins enable row level security;
 alter table public.sky_pins enable row level security;
 alter table public.sky_pin_fails enable row level security;
 revoke all on public.sky_class_logins, public.sky_pins, public.sky_pin_fails from anon, authenticated;
 grant select, insert, delete on public.sky_class_logins to authenticated;
 grant select, insert, update, delete on public.sky_pins to authenticated;
+grant select, delete on public.sky_pin_fails to authenticated; -- teachers see and clear their own lockouts
 drop policy if exists sky_class_logins_own on public.sky_class_logins;
 create policy sky_class_logins_own on public.sky_class_logins for all to authenticated using (owner = (select auth.uid())) with check (owner = (select auth.uid()));
 drop policy if exists sky_pins_own on public.sky_pins;
 create policy sky_pins_own on public.sky_pins for all to authenticated using (owner = (select auth.uid())) with check (owner = (select auth.uid()));
+drop policy if exists sky_pin_fails_own on public.sky_pin_fails;
+create policy sky_pin_fails_own on public.sky_pin_fails for all to authenticated using (owner = (select auth.uid()));
 
 -- First names of children who have a PIN, for the "tap your name" screen. Nothing else about them.
 create or replace function public.sky_class_roster(p_class text) returns jsonb
@@ -189,35 +194,41 @@ begin
     where exists (select 1 from public.sky_pins p where p.owner = l.owner and p.class_id = l.class_id and p.student_id = st->>'id')), '[]'::jsonb));
 end $$;
 
--- Checks a child's picture PIN and hands back their family code for this visit. Eight wrong tries lock
--- that child; each lockout lasts twice as long as the last (10 minutes, 20, 40 ... up to a day), so the
--- 4,096 possible PINs cannot be worked through. A right PIN clears the record.
+-- Checks a child's picture PIN and hands back their family code for this visit.
+-- Guessing limits, per child: 8 wrong tries in 10 minutes locks them, and each lockout lasts twice as long
+-- as the last (10, 20, 40 minutes ... up to a day); 20 wrong tries in a day locks them until the day is up.
+-- Lockouts wear off after a quiet day, a right PIN clears them, and the teacher can clear them at any time.
 create or replace function public.sky_pin_login(p_class text, p_student text, p_pin text) returns text
 language plpgsql security definer set search_path = '' as $$
-declare l public.sky_class_logins; f public.sky_pin_fails; ok boolean; k text; lock_len interval;
+declare l public.sky_class_logins; f public.sky_pin_fails; ok boolean; k text; lock_len interval; nf integer; nl integer;
 begin
   select * into l from public.sky_class_logins where code = upper(btrim(coalesce(p_class, '')));
   if not found then return null; end if;
-  -- One guess at a time per child, so a burst of simultaneous guesses cannot slip past the counter.
-  perform pg_advisory_xact_lock(hashtextextended(l.owner::text || '|' || l.class_id || '|' || coalesce(p_student, ''), 0));
-  select * into f from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = coalesce(p_student, '');
-  if found then lock_len := least(interval '10 minutes' * power(2, greatest(f.locks, 1) - 1), interval '1 day'); end if;
-  if found and f.fails >= 8 and f.since > now() - lock_len then return 'LOCKED'; end if;
+  if not exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student) then return null; end if;
+  -- One guess at a time per child, so a burst of simultaneous guesses cannot slip past the counters.
+  perform pg_advisory_xact_lock(hashtextextended(l.owner::text || '|' || l.class_id || '|' || p_student, 0));
+  select * into f from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = p_student;
+  if found then
+    lock_len := least(interval '10 minutes' * power(2, greatest(f.locks, 1) - 1), interval '1 day');
+    if (f.fails >= 8 and f.since > now() - lock_len) or (f.day_fails >= 20 and f.day_since > now() - interval '1 day') then return 'LOCKED'; end if;
+  end if;
   select exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student and pin = p_pin) into ok;
-  if not ok then
-    if not exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student) then return null; end if;
+  if ok then
+    delete from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = p_student;
+  else
     if f.owner is null then
-      insert into public.sky_pin_fails (owner, class_id, student_id, fails, since) values (l.owner, l.class_id, p_student, 1, now());
-    elsif f.fails >= 8 or f.since < now() - interval '10 minutes' then -- a lockout or a quiet spell has passed: start counting again
-      update public.sky_pin_fails set fails = 1, since = now() where owner = l.owner and class_id = l.class_id and student_id = p_student;
-    elsif f.fails + 1 >= 8 then -- this wrong guess starts a new, longer lockout
-      update public.sky_pin_fails set fails = 8, since = now(), locks = locks + 1 where owner = l.owner and class_id = l.class_id and student_id = p_student;
-    else
-      update public.sky_pin_fails set fails = fails + 1 where owner = l.owner and class_id = l.class_id and student_id = p_student;
+      insert into public.sky_pin_fails (owner, class_id, student_id, fails, since, locks, day_fails, day_since) values (l.owner, l.class_id, p_student, 1, now(), 0, 1, now());
+      return null;
     end if;
+    nl := case when f.since < now() - interval '1 day' - lock_len then 0 else f.locks end; -- a quiet day forgives earlier lockouts
+    nf := case when f.fails >= 8 or f.since < now() - interval '10 minutes' then 1 else f.fails + 1 end;
+    update public.sky_pin_fails set
+      fails = least(nf, 8), since = case when nf = 1 or nf >= 8 then now() else since end, locks = nl + (case when nf >= 8 then 1 else 0 end),
+      day_fails = case when day_since < now() - interval '1 day' then 1 else day_fails + 1 end,
+      day_since = case when day_since < now() - interval '1 day' then now() else day_since end
+      where owner = l.owner and class_id = l.class_id and student_id = p_student;
     return null;
   end if;
-  delete from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = p_student;
   select code into k from public.sky_codes where owner = l.owner and class_id = l.class_id and student_id = p_student;
   if k is null then
     loop

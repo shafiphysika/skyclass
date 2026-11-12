@@ -127,6 +127,21 @@ test('teachers are isolated, saves are revision-checked, family codes show one c
     await db.exec('reset role'); await db.exec("update public.sky_pin_fails set since = now() - interval '21 minutes'");
     await as(null); assert.equal(await login('1234'), k1, 'unlocks after twenty minutes');
     await db.exec('reset role'); assert.equal((await q('select count(*)::int n from public.sky_pin_fails'))[0].n, 0, 'a right PIN clears the record'); await as(null);
+    // slow guessing: 7 tries every 10 minutes never trips the short lock, but 20 in a day does
+    for (const n of [7, 7, 6]) {
+      for (let i = 0; i < n; i++) assert.notEqual(await login('1111'), 'LOCKED');
+      await db.exec('reset role'); await db.exec("update public.sky_pin_fails set since = now() - interval '11 minutes'"); await as(null);
+    }
+    assert.equal(await login('1234'), 'LOCKED', '20 wrong tries in a day locks for the day, even when spread out');
+    await db.exec('reset role'); await db.exec("update public.sky_pin_fails set since = now() - interval '2 days', day_since = now() - interval '25 hours'"); await as(null);
+    assert.equal(await login('1234'), k1, 'the daily lock ends after a day');
+    // the teacher can clear a lockout straight away
+    for (let i = 0; i < 8; i++) await login('1111');
+    assert.equal(await login('1234'), 'LOCKED');
+    await as(T2); assert.equal((await db.query('delete from public.sky_pin_fails')).affectedRows, 0, 'another teacher cannot clear it');
+    await as(T1); assert.equal((await q('select count(*)::int n from public.sky_pin_fails'))[0].n, 1, 'teacher sees the lockout');
+    await q("delete from public.sky_pin_fails where class_id = 'c1'");
+    await as(null); assert.equal(await login('1234'), k1, 'unlocked by the teacher');
 
     await as(T1); await q("delete from public.sky_codes where code='ABCDEFGH23'");
     await as(null);

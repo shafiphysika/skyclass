@@ -15,7 +15,7 @@
   // Online mode is optional: without config.js values (or if the library fails to load) everything stays on this device.
   const cfg = window.SKY_CONFIG || {};
   const sb = window.supabase && cfg.supabaseUrl && cfg.supabaseKey ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
-  const cloud = { user: null, rev: 0, status: '', codes: [], res: {}, moods: {}, logins: [], pins: [] };
+  const cloud = { user: null, rev: 0, status: '', codes: [], res: {}, moods: {}, logins: [], pins: [], fails: [] };
   const PIN_PICS = ['🐶', '🐱', '🦊', '🐼', '🐸', '🐵', '🦁', '🐰'];
   let roster = null, pinFor = null, pinTyped = ''; // iPad login in progress
   let fam = null, famCode = null, syncT; // fam: the read-only school a family code unlocked; famCode stays in memory only
@@ -288,12 +288,13 @@
       <button class="btn" data-act="ipadon">Turn on iPad login</button></section>`;
     return `<section class="panel"><h3>iPad login for ${esc(c.name)}</h3><p>Class code: <code class="bigcode">${esc(login.code)}</code></p>
       <p>On each iPad: open <b>${esc(location.host + location.pathname)}</b>, choose Student, enter the code once. The iPad remembers the class.</p>
+      ${(() => { const locked = c.students.filter(s => cloud.fails.some(x => x.class_id === c.id && x.student_id === s.id)); return locked.length ? `<p class="care">🔒 Locked after too many wrong PINs: ${locked.map(s => esc(s.name)).join(', ')} <button class="pill" data-act="pinunlock">Unlock</button></p>` : ''; })()}
       <div class="chips"><button class="btn" data-act="pincards">🖨️ Print picture PIN cards</button>${missing ? `<button class="pill" data-act="ipadpins">Make PINs for ${missing} new student${missing === 1 ? '' : 's'}</button>` : ''}<button class="pill danger" data-act="ipadoff">Turn off iPad login</button></div></section>`;
   }
   const newPin = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), b => (b % 8) + 1).join('');
   async function loadLogins() {
-    const [l, p] = await Promise.all([sb.from('sky_class_logins').select('code,class_id'), sb.from('sky_pins').select('class_id,student_id,pin')]);
-    cloud.logins = l.data || []; cloud.pins = p.data || [];
+    const [l, p, f] = await Promise.all([sb.from('sky_class_logins').select('code,class_id'), sb.from('sky_pins').select('class_id,student_id,pin'), sb.from('sky_pin_fails').select('class_id,student_id,fails,day_fails')]);
+    cloud.logins = l.data || []; cloud.pins = p.data || []; cloud.fails = (f.data || []).filter(x => x.fails >= 8 || x.day_fails >= 20);
   }
 
   /* ---------- practice: question sets, assignments and results ---------- */
@@ -613,7 +614,8 @@
       const c = cls(), rows = c.students.filter(s => !cloud.pins.some(p => p.class_id === c.id && p.student_id === s.id)).map(s => ({ class_id: c.id, student_id: s.id, pin: newPin() }));
       if (rows.length) { const { error } = await sb.from('sky_pins').insert(rows); if (error) return toast('PINs could not be made. ' + error.message); }
       await loadLogins(); render(); toast('iPad login is on. Print the PIN cards for your class.'); },
-    async ipadoff() { const c = cls(); if (!confirm(`Turn off iPad login for ${c.name}? The class code and picture PINs stop working. Turning it on again makes new ones.`)) return; await sb.from('sky_class_logins').delete().match({ class_id: c.id }); await sb.from('sky_pins').delete().match({ class_id: c.id }); await loadLogins(); render(); },
+    async pinunlock() { const c = cls(); const { error } = await sb.from('sky_pin_fails').delete().match({ class_id: c.id }); if (error) return toast('Could not unlock. ' + error.message); await loadLogins(); render(); toast('Unlocked. They can try their PIN again.'); },
+    async ipadoff() { const c = cls(); if (!confirm(`Turn off iPad login for ${c.name}? The class code and picture PINs stop working. Turning it on again makes new ones.`)) return; await sb.from('sky_class_logins').delete().match({ class_id: c.id }); await sb.from('sky_pins').delete().match({ class_id: c.id }); await sb.from('sky_pin_fails').delete().match({ class_id: c.id }); await loadLogins(); render(); },
     pincards() {
       const c = cls(), login = cloud.logins.find(l => l.class_id === c.id), w = window.open('', '_blank'); if (!w || !login) return toast('Allow pop-ups for this site to print PIN cards.');
       const cards = c.students.map(s => { const p = cloud.pins.find(x => x.class_id === c.id && x.student_id === s.id); return p ? `<div class="card"><b>${esc(s.name)}</b><span class="pics">${[...p.pin].map(d => PIN_PICS[+d - 1]).join(' ')}</span><small>Class code ${esc(login.code)}</small></div>` : ''; }).join('');
