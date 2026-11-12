@@ -162,6 +162,7 @@ create table if not exists public.sky_pin_fails (
   owner uuid not null references auth.users(id) on delete cascade, class_id text not null, student_id text not null,
   fails integer not null default 0, since timestamptz not null default now(), primary key (owner, class_id, student_id)
 );
+alter table public.sky_pin_fails add column if not exists locks integer not null default 0;
 alter table public.sky_class_logins enable row level security;
 alter table public.sky_pins enable row level security;
 alter table public.sky_pin_fails enable row level security;
@@ -188,25 +189,32 @@ begin
     where exists (select 1 from public.sky_pins p where p.owner = l.owner and p.class_id = l.class_id and p.student_id = st->>'id')), '[]'::jsonb));
 end $$;
 
--- Checks a child's picture PIN and hands back their family code for this visit. Eight wrong tries locks
--- that child for ten minutes, so PINs cannot be guessed by trying them all.
+-- Checks a child's picture PIN and hands back their family code for this visit. Eight wrong tries lock
+-- that child; each lockout lasts twice as long as the last (10 minutes, 20, 40 ... up to a day), so the
+-- 4,096 possible PINs cannot be worked through. A right PIN clears the record.
 create or replace function public.sky_pin_login(p_class text, p_student text, p_pin text) returns text
 language plpgsql security definer set search_path = '' as $$
-declare l public.sky_class_logins; f public.sky_pin_fails; ok boolean; k text;
+declare l public.sky_class_logins; f public.sky_pin_fails; ok boolean; k text; lock_len interval;
 begin
   select * into l from public.sky_class_logins where code = upper(btrim(coalesce(p_class, '')));
   if not found then return null; end if;
   -- One guess at a time per child, so a burst of simultaneous guesses cannot slip past the counter.
   perform pg_advisory_xact_lock(hashtextextended(l.owner::text || '|' || l.class_id || '|' || coalesce(p_student, ''), 0));
   select * into f from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = coalesce(p_student, '');
-  if found and f.fails >= 8 and f.since > now() - interval '10 minutes' then return 'LOCKED'; end if;
+  if found then lock_len := least(interval '10 minutes' * power(2, greatest(f.locks, 1) - 1), interval '1 day'); end if;
+  if found and f.fails >= 8 and f.since > now() - lock_len then return 'LOCKED'; end if;
   select exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student and pin = p_pin) into ok;
   if not ok then
     if not exists (select 1 from public.sky_pins where owner = l.owner and class_id = l.class_id and student_id = p_student) then return null; end if;
-    insert into public.sky_pin_fails (owner, class_id, student_id, fails, since) values (l.owner, l.class_id, p_student, 1, now())
-      on conflict (owner, class_id, student_id) do update set
-        fails = case when public.sky_pin_fails.since < now() - interval '10 minutes' then 1 else public.sky_pin_fails.fails + 1 end,
-        since = case when public.sky_pin_fails.since < now() - interval '10 minutes' then now() else public.sky_pin_fails.since end;
+    if f.owner is null then
+      insert into public.sky_pin_fails (owner, class_id, student_id, fails, since) values (l.owner, l.class_id, p_student, 1, now());
+    elsif f.fails >= 8 or f.since < now() - interval '10 minutes' then -- a lockout or a quiet spell has passed: start counting again
+      update public.sky_pin_fails set fails = 1, since = now() where owner = l.owner and class_id = l.class_id and student_id = p_student;
+    elsif f.fails + 1 >= 8 then -- this wrong guess starts a new, longer lockout
+      update public.sky_pin_fails set fails = 8, since = now(), locks = locks + 1 where owner = l.owner and class_id = l.class_id and student_id = p_student;
+    else
+      update public.sky_pin_fails set fails = fails + 1 where owner = l.owner and class_id = l.class_id and student_id = p_student;
+    end if;
     return null;
   end if;
   delete from public.sky_pin_fails where owner = l.owner and class_id = l.class_id and student_id = p_student;

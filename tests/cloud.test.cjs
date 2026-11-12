@@ -119,7 +119,14 @@ test('teachers are isolated, saves are revision-checked, family codes show one c
     for (let i = 0; i < 8; i++) await login('1111');
     assert.equal(await login('1234'), 'LOCKED', 'eight wrong tries locks even the right PIN');
     await db.exec('reset role'); await db.exec("update public.sky_pin_fails set since = now() - interval '11 minutes'");
-    await as(null); assert.equal(await login('1234'), k1, 'unlocks after ten minutes');
+    await as(null); assert.equal(await login('1111'), null, 'first lockout lasts ten minutes');
+    for (let i = 0; i < 7; i++) await login('1111');
+    assert.equal(await login('1234'), 'LOCKED', 'second lockout');
+    await db.exec('reset role'); await db.exec("update public.sky_pin_fails set since = now() - interval '11 minutes'");
+    await as(null); assert.equal(await login('1234'), 'LOCKED', 'the second lockout lasts twice as long');
+    await db.exec('reset role'); await db.exec("update public.sky_pin_fails set since = now() - interval '21 minutes'");
+    await as(null); assert.equal(await login('1234'), k1, 'unlocks after twenty minutes');
+    await db.exec('reset role'); assert.equal((await q('select count(*)::int n from public.sky_pin_fails'))[0].n, 0, 'a right PIN clears the record'); await as(null);
 
     await as(T1); await q("delete from public.sky_codes where code='ABCDEFGH23'");
     await as(null);
