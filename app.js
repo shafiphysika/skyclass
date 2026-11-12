@@ -60,12 +60,12 @@
 
   /* ---------- shared pieces ---------- */
   const CLOUDS = '<i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i>';
-  const KITE = '<svg viewBox="0 0 60 90" width="60" height="90"><path d="M30 2 56 34 30 66 4 34Z" fill="#ff5d8f"/><path d="M30 2 56 34 30 34Z" fill="#ffc93c"/><path d="M30 34 30 66 4 34Z" fill="#3aa0ff"/><path class="tail" d="M30 66q-8 6 0 12t0 12" fill="none" stroke="#1b2a5c" stroke-width="2" stroke-linecap="round"/></svg>';
+  const KITE = '<span class="rocket">🚀</span>';
   const stringPath = lift => { const x = 30 + lift * 45 + 3, y = 70 - lift * 58 + 14; return `M6,100 Q${x * .45},${y + 34} ${x},${y}`; };
   function skyText(c) {
     const total = C.classTotal(c), g = c.goal;
     return total >= g.target ? `<h2>Goal reached: ${esc(g.reward)}!</h2><p>${total} stars together. Set the next goal when you are ready.</p>`
-      : `<h2>${g.target - total} stars to ${esc(g.reward)}</h2><p>${esc(c.name)} has ${total} of ${g.target} stars. Every star lifts the kite.</p>`;
+      : `<h2>${g.target - total} stars to ${esc(g.reward)}</h2><p>${esc(c.name)} has ${total} of ${g.target} stars. Every star fuels the rocket.</p>`;
   }
   function skyHTML(c, canEdit) {
     const lift = Math.min(1, C.classTotal(c) / c.goal.target); wonAt[c.id] = lift >= 1;
@@ -98,7 +98,7 @@
     if (!ui.role) { top.innerHTML = tabs.innerHTML = ''; app.innerHTML = homeHTML(); return; }
     const list = TABS[ui.role]; if (list.length && !list.some(t => t[0] === ui.tab)) ui.tab = list[0][0];
     const picker = ui.role === 'teacher' && state.classes.length ? `<label class="pick"><span class="sr">Class</span><select data-change="class">${state.classes.map(c => `<option value="${esc(c.id)}" ${c.id === state.activeClass ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>` : '';
-    top.innerHTML = `<button class="brand" data-act="home">🪁 Skyclass</button>${picker}<button class="pill" data-act="home">Switch view</button>`;
+    top.innerHTML = `<button class="brand" data-act="home">🚀 Skyclass</button>${picker}<button class="pill" data-act="home">Switch view</button>`;
     tabs.innerHTML = list.map(([id, ic, label]) => `<button data-act="tab" data-tab="${id}" ${ui.tab === id ? 'aria-current="page"' : ''}><span>${ic}</span>${label}</button>`).join('');
     app.innerHTML = ui.role === 'teacher' ? teacherHTML() : ui.role === 'student' ? studentHTML() : parentHTML();
     if (ui.role === 'teacher' && ui.tab === 'tools') paintTimer();
@@ -106,12 +106,12 @@
   function homeHTML() {
     return `<section class="hero sky" style="--lift:.95">${CLOUDS}
       <svg class="string" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="${stringPath(.95)}"/></svg><div class="kite">${KITE}</div>
-      <i class="sun"></i><span class="balloon b1">🎈</span><span class="balloon b2">🎈</span><span class="balloon b3">🎈</span><i class="hill h1"></i><i class="hill h2"></i>
-      <div class="herotext"><h1 aria-label="Skyclass">${[...'Skyclass'].map((ch, i) => `<span style="--i:${i}">${ch}</span>`).join('')}</h1><p>Stars, lessons and classroom games for the whole school day. Who is here?</p></div>
+      <i class="sun"></i><span class="balloon b1">🛸</span><span class="balloon b2">🛰️</span><span class="balloon b3">👾</span><i class="hill h1"></i><i class="hill h2"></i>
+      <div class="herotext"><h1 aria-label="Skyclass">${[...'Skyclass'].map((ch, i) => `<span style="--i:${i}">${ch}</span>`).join('')}</h1><p>Mission control for your class: stars, lessons and games. Who is on board?</p></div>
       <div class="doors">
-        <button data-act="enter" data-role="teacher"><span>🧑‍🏫</span><b>Teacher</b><small>Run the class</small></button>
-        <button data-act="enter" data-role="student"><span>🎒</span><b>Student</b><small>See my stars and play lessons</small></button>
-        <button data-act="enter" data-role="parent"><span>👪</span><b>Parent</b><small>See how my child is doing</small></button>
+        <button data-act="enter" data-role="teacher"><span>🧑‍🏫</span><b>Teacher</b><small>Command the mission</small></button>
+        <button data-act="enter" data-role="student"><span>🎒</span><b>Student</b><small>Check my stars, play and learn</small></button>
+        <button data-act="enter" data-role="parent"><span>👪</span><b>Parent</b><small>Follow my child on the journey</small></button>
       </div><p class="devnote">Everything is saved on this device only.</p></section>`;
   }
 

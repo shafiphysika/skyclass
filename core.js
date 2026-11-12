@@ -19,9 +19,9 @@
     { id: 'home', label: 'Homework done', icon: '🏠', points: 1 },
   ];
   const BADGES = [
-    { at: 10, icon: '🌱', label: 'Sprout' }, { at: 25, icon: '🎈', label: 'Lift-off' },
-    { at: 50, icon: '🪁', label: 'Kite flyer' }, { at: 100, icon: '🌈', label: 'Rainbow rider' },
-    { at: 200, icon: '🚀', label: 'Sky captain' },
+    { at: 10, icon: '🧑‍🚀', label: 'Cadet' }, { at: 25, icon: '🚀', label: 'Lift-off' },
+    { at: 50, icon: '🛰️', label: 'Orbiter' }, { at: 100, icon: '🌠', label: 'Star pilot' },
+    { at: 200, icon: '🪐', label: 'Sky captain' },
   ];
 
   function parseNames(text) {
