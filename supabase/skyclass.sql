@@ -400,9 +400,13 @@ alter table public.sky_login_ip enable row level security;
 revoke all on public.sky_login_ip from anon, authenticated;
 create or replace function public.sky_user_login(p_user text, p_pin text) returns text
 language plpgsql security definer set search_path = '' as $$
-declare u public.sky_usernames; h timestamptz := date_trunc('hour', now()); k text; v_ip text; name text := lower(btrim(coalesce(p_user, '')));
+declare u public.sky_usernames; h timestamptz := date_trunc('hour', now()); k text; v_ip text; hd json; xff text[]; name text := lower(btrim(coalesce(p_user, '')));
 begin
-  v_ip := left(coalesce(nullif(btrim(split_part(coalesce(current_setting('request.headers', true), '{}')::json->>'x-forwarded-for', ',', 1)), ''), 'unknown'), 64);
+  -- The visitor's address as the network saw it: Cloudflare's header, or the last x-forwarded-for entry
+  -- (added by the proxy). Earlier entries are whatever the visitor sent, so they are never trusted.
+  hd := coalesce(nullif(current_setting('request.headers', true), ''), '{}')::json;
+  xff := string_to_array(coalesce(hd->>'x-forwarded-for', ''), ',');
+  v_ip := left(coalesce(nullif(btrim(hd->>'cf-connecting-ip'), ''), nullif(btrim(xff[array_length(xff, 1)]), ''), 'unknown'), 64);
   if coalesce((select l.fails from public.sky_login_ip l where l.hour = h and l.ip = v_ip), 0) >= 60 then return 'BUSY'; end if;
   if name ~ '^[a-z0-9]+-[a-z2-9]{5}$' then
     select * into u from public.sky_usernames where username = name;

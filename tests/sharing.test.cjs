@@ -82,7 +82,7 @@ test('co-teachers see only invited classes, usernames sign in, photos and notes 
     assert.equal(await one("select public.sky_user_login('nobody', '1234')"), null, 'unknown user looks like a wrong PIN');
     for (let i = 0; i < 8; i++) await q('select public.sky_user_login($1, $2)', [ann, '1111']);
     assert.equal(await one('select public.sky_user_login($1, $2)', [ann, '1234']), 'LOCKED');
-    const from = ip => db.query("select set_config('request.headers', $1, false)", [JSON.stringify({ 'x-forwarded-for': ip + ', 10.0.0.1' })]);
+    const from = ip => db.query("select set_config('request.headers', $1, false)", [JSON.stringify({ 'x-forwarded-for': '1.2.3.' + Math.floor(Math.random() * 255) + ', ' + ip })]); // first entry is visitor-made, so it changes each time
     await from('203.0.113.9');
     for (let i = 0; i < 60; i++) await q("select public.sky_user_login('guess-' || $1, '1234')", [String(i)]);
     assert.equal(await one('select public.sky_user_login($1, $2)', [names[1], '5678']), 'BUSY', '60 failures in an hour pause this connection');
