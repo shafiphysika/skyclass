@@ -407,6 +407,7 @@ begin
   hd := coalesce(nullif(current_setting('request.headers', true), ''), '{}')::json;
   xff := string_to_array(coalesce(hd->>'x-forwarded-for', ''), ',');
   v_ip := left(coalesce(nullif(btrim(hd->>'cf-connecting-ip'), ''), nullif(btrim(xff[array_length(xff, 1)]), ''), 'unknown'), 64);
+  perform pg_advisory_xact_lock(hashtextextended('sky_user_login|' || v_ip, 0)); -- one sign-in at a time per connection, so bursts cannot slip past the count
   if coalesce((select l.fails from public.sky_login_ip l where l.hour = h and l.ip = v_ip), 0) >= 60 then return 'BUSY'; end if;
   if name ~ '^[a-z0-9]+-[a-z2-9]{5}$' then
     select * into u from public.sky_usernames where username = name;
