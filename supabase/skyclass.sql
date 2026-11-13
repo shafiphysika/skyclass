@@ -275,8 +275,12 @@ drop policy if exists sky_results_own on public.sky_results;
 create policy sky_results_own on public.sky_results for all to authenticated using (public.sky_can(owner, class_id));
 drop policy if exists sky_checkins_own on public.sky_checkins;
 create policy sky_checkins_own on public.sky_checkins for all to authenticated using (public.sky_can(owner, class_id));
+-- Co-teachers can see who is locked out; only the owner can unlock, so the PIN limits cannot be reset over and over.
 drop policy if exists sky_pin_fails_own on public.sky_pin_fails;
-create policy sky_pin_fails_own on public.sky_pin_fails for all to authenticated using (public.sky_can(owner, class_id));
+drop policy if exists sky_pin_fails_read on public.sky_pin_fails;
+drop policy if exists sky_pin_fails_unlock on public.sky_pin_fails;
+create policy sky_pin_fails_read on public.sky_pin_fails for select to authenticated using (public.sky_can(owner, class_id));
+create policy sky_pin_fails_unlock on public.sky_pin_fails for delete to authenticated using (owner = (select auth.uid()));
 drop policy if exists sky_pins_own on public.sky_pins;
 drop policy if exists sky_pins_read on public.sky_pins;
 drop policy if exists sky_pins_write on public.sky_pins;
@@ -386,23 +390,27 @@ begin
   if not found then return null; end if;
   return public.sky__pin_try(l.owner, l.class_id, coalesce(p_student, ''), p_pin);
 end $$;
--- Username sign-in works from anywhere, so on top of each child's own limits there is a school-wide one:
--- after 300 failed username sign-ins in an hour, username sign-in pauses until the hour is over ('BUSY').
--- Unknown usernames and wrong PINs give the same answer, so usernames cannot be fished for.
-create table if not exists public.sky_login_hour (hour timestamptz primary key, fails integer not null default 0);
-alter table public.sky_login_hour enable row level security;
-revoke all on public.sky_login_hour from anon, authenticated;
+-- Username sign-in works from anywhere, so on top of each child's own limits each internet connection gets
+-- 60 failed username sign-ins an hour; after that, that connection gets 'BUSY' until the hour is over.
+-- It is per connection, so one person guessing cannot block everyone else. Unknown usernames and wrong PINs
+-- give the same answer, so usernames cannot be fished for, and usernames without the random part never work.
+drop table if exists public.sky_login_hour;
+create table if not exists public.sky_login_ip (hour timestamptz not null, ip text not null, fails integer not null default 0, primary key (hour, ip));
+alter table public.sky_login_ip enable row level security;
+revoke all on public.sky_login_ip from anon, authenticated;
 create or replace function public.sky_user_login(p_user text, p_pin text) returns text
 language plpgsql security definer set search_path = '' as $$
-declare u public.sky_usernames; h timestamptz := date_trunc('hour', now()); k text;
+declare u public.sky_usernames; h timestamptz := date_trunc('hour', now()); k text; v_ip text; name text := lower(btrim(coalesce(p_user, '')));
 begin
-  perform pg_advisory_xact_lock(hashtextextended('sky_user_login', 0));
-  if coalesce((select fails from public.sky_login_hour where hour = h), 0) >= 300 then return 'BUSY'; end if;
-  select * into u from public.sky_usernames where username = lower(btrim(coalesce(p_user, '')));
-  if found then k := public.sky__pin_try(u.owner, u.class_id, u.student_id, p_pin); end if;
+  v_ip := left(coalesce(nullif(btrim(split_part(coalesce(current_setting('request.headers', true), '{}')::json->>'x-forwarded-for', ',', 1)), ''), 'unknown'), 64);
+  if coalesce((select l.fails from public.sky_login_ip l where l.hour = h and l.ip = v_ip), 0) >= 60 then return 'BUSY'; end if;
+  if name ~ '^[a-z0-9]+-[a-z2-9]{5}$' then
+    select * into u from public.sky_usernames where username = name;
+    if found then k := public.sky__pin_try(u.owner, u.class_id, u.student_id, p_pin); end if;
+  end if;
   if k is null then
-    insert into public.sky_login_hour values (h, 1) on conflict (hour) do update set fails = public.sky_login_hour.fails + 1;
-    delete from public.sky_login_hour where hour < h - interval '1 day';
+    insert into public.sky_login_ip values (h, v_ip, 1) on conflict (hour, ip) do update set fails = public.sky_login_ip.fails + 1;
+    delete from public.sky_login_ip where hour < h - interval '1 day';
   end if;
   return k;
 end $$;

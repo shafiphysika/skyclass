@@ -48,6 +48,10 @@ test('co-teachers see only invited classes, usernames sign in, photos and notes 
     assert.equal(await one('select public.sky_save_shared($1,$2,$3)', [OWN, edited, loaded.rev]), 2);
     assert.equal(await one('select public.sky_save_shared($1,$2,1)', [OWN, edited]), null, 'stale save refused');
     assert.equal((await q('select * from public.sky_pins')).length, 0, 'co-teachers never see PINs');
+    await db.exec('reset role'); await db.query("insert into public.sky_pin_fails(owner,class_id,student_id,fails) values ($1,'c601','s1',8)", [OWN]); await as(CO);
+    assert.equal((await q('select * from public.sky_pin_fails')).length, 1, 'co-teacher sees the lockout');
+    assert.equal((await db.query('delete from public.sky_pin_fails')).affectedRows, 0, 'but cannot unlock it');
+    await as(OWN); assert.equal((await db.query('delete from public.sky_pin_fails')).affectedRows, 1, 'the owner can'); await as(CO);
     await assert.rejects(q("insert into public.sky_pins(owner,class_id,student_id,pin) values ($1,'c601','s3','4444')", [OWN]), /row-level security/, 'cannot change PINs');
     assert.equal((await q('select * from public.sky_usernames')).length, 3);
     assert.equal((await q('select * from public.sky_codes')).length, 0, 'co-teachers never see family codes');
@@ -78,10 +82,18 @@ test('co-teachers see only invited classes, usernames sign in, photos and notes 
     assert.equal(await one("select public.sky_user_login('nobody', '1234')"), null, 'unknown user looks like a wrong PIN');
     for (let i = 0; i < 8; i++) await q('select public.sky_user_login($1, $2)', [ann, '1111']);
     assert.equal(await one('select public.sky_user_login($1, $2)', [ann, '1234']), 'LOCKED');
-    for (let i = 0; i < 290; i++) await q("select public.sky_user_login('guess' || $1, '1234')", [String(i)]);
-    assert.equal(await one('select public.sky_user_login($1, $2)', [names[1], '5678']), 'BUSY', '300 failures in an hour pause username sign-in for everyone');
+    const from = ip => db.query("select set_config('request.headers', $1, false)", [JSON.stringify({ 'x-forwarded-for': ip + ', 10.0.0.1' })]);
+    await from('203.0.113.9');
+    for (let i = 0; i < 60; i++) await q("select public.sky_user_login('guess-' || $1, '1234')", [String(i)]);
+    assert.equal(await one('select public.sky_user_login($1, $2)', [names[1], '5678']), 'BUSY', '60 failures in an hour pause this connection');
+    await from('198.51.100.7');
+    assert.match(await one('select public.sky_user_login($1, $2)', [names[1], '5678']), /^[A-HJ-NP-Z2-9]{10}$/, 'other connections are not blocked');
     assert.equal(await one("select public.sky_pin_login('NOPE2345','s2','5678')"), null, 'class-code sign-in is not affected');
-    await db.exec('reset role'); await db.exec('delete from public.sky_login_hour'); await as(null);
+    await db.exec('reset role');
+    await db.query("delete from public.sky_usernames where student_id = 's3'"); await db.query("insert into public.sky_usernames values ('60199', $1, 'c601', 's3')", [OWN]);
+    await db.query("insert into public.sky_pins values ($1, 'c601', 's3', '2222')", [OWN]); await db.exec('delete from public.sky_login_ip'); await as(null);
+    assert.equal(await one("select public.sky_user_login('60199', '2222')"), null, 'an old username without the random part never works');
+    await db.exec('reset role'); await db.exec('delete from public.sky_login_ip'); await as(null);
     await assert.rejects(q("select public.sky__pin_try($1,'c601','s1','1234')", [OWN]), /permission denied/, 'the PIN check is not callable directly');
 
     // photos and notes: the child's own login sees theirs, nobody else's

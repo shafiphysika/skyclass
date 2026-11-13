@@ -300,7 +300,7 @@
     return `<section class="panel"><h3>Student sign-in for ${esc(c.name)}</h3><p>Class code: <code class="bigcode">${esc(login.code)}</code></p>
       <p>At school or home: open <b>${esc(location.host + location.pathname)}</b>, choose Student (or Parent), and sign in with the username and pictures on the card. On a shared iPad, the class code lets children tap their name instead.</p>
       ${noUser && isOwner() ? `<p><button class="pill" data-act="mkusers">Make usernames for ${noUser} student${noUser === 1 ? '' : 's'}</button></p>` : ''}
-      ${(() => { const locked = c.students.filter(s => cloud.fails.some(x => x.class_id === c.id && x.student_id === s.id)); return locked.length ? `<p class="care">🔒 Locked after too many wrong PINs: ${locked.map(s => esc(s.name)).join(', ')} <button class="pill" data-act="pinunlock">Unlock</button></p>` : ''; })()}
+      ${(() => { const locked = c.students.filter(s => cloud.fails.some(x => x.class_id === c.id && x.student_id === s.id)); return locked.length ? `<p class="care">🔒 Locked after too many wrong PINs: ${locked.map(s => esc(s.name)).join(', ')} ${isOwner() ? '<button class="pill" data-act="pinunlock">Unlock</button>' : ' (the class owner can unlock)'}</p>` : ''; })()}
       <div class="chips"><button class="btn" data-act="pincards">🖨️ Print sign-in cards</button>${isOwner() ? `${missing ? `<button class="pill" data-act="ipadpins">Make PINs for ${missing} new student${missing === 1 ? '' : 's'}</button>` : ''}<button class="pill danger" data-act="ipadoff">Turn off student sign-in</button>` : ''}</div></section>`;
   }
   const newPin = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), b => (b % 8) + 1).join('');
