@@ -281,6 +281,71 @@
     }).filter(Boolean);
   }
 
+  /* Merging: when another device or a co-teacher saved first, keep both sets of changes.
+     base = the copy both sides started from, local = this device, server = what was saved meanwhile. */
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const byId = list => new Map((list || []).map(x => [x.id, x]));
+  // Lists of things with ids: local additions and edits win, local deletions apply, server additions stay.
+  function mergeList(base, local, server, mergeItem) {
+    const b = byId(base), l = byId(local), out = [];
+    for (const s of server || []) {
+      const li = l.get(s.id), bi = b.get(s.id);
+      if (!li) { if (!bi) out.push(s); continue; } // deleted here (was in base) or new on the server
+      out.push(mergeItem ? mergeItem(bi, li, s) : (same(li, bi) ? s : li));
+    }
+    for (const li of local || []) if (!b.has(li.id) && !(server || []).some(s => s.id === li.id)) out.push(li); // new here
+    return out;
+  }
+  // Day -> student -> value maps (attendance, check-ins): changes made here are applied on top of the server's.
+  function mergeDays(base, local, server) {
+    const out = JSON.parse(JSON.stringify(server || {}));
+    const days = new Set([...Object.keys(base || {}), ...Object.keys(local || {})]);
+    for (const d of days) {
+      const bd = (base || {})[d] || {}, ld = (local || {})[d] || {};
+      for (const sid of new Set([...Object.keys(bd), ...Object.keys(ld)])) {
+        if (bd[sid] === ld[sid]) continue;
+        out[d] = out[d] || {};
+        if (ld[sid] === undefined) delete out[d][sid]; else out[d][sid] = ld[sid];
+      }
+    }
+    return out;
+  }
+  function mergeStudent(bs, ls, ss) {
+    const out = { ...ss };
+    out.points = Math.max(0, ss.points + ls.points - (bs ? bs.points : ss.points));
+    if (bs && ls.name !== bs.name) out.name = ls.name;
+    const seen = bs ? Math.max(0, ...bs.log.map(l => l.t)) : Infinity;
+    out.log = [...ss.log, ...ls.log.filter(l => l.t > seen)].sort((a, b) => a.t - b.t).slice(-MAX_LOG);
+    return out;
+  }
+  function mergeClass(bc, lc, sc) {
+    if (!bc) return lc;
+    const out = { ...sc };
+    out.students = mergeList(bc.students, lc.students, sc.students, (bs, ls, ss) => mergeStudent(bs, ls, ss));
+    out.attendance = mergeDays(bc.attendance, lc.attendance, sc.attendance);
+    out.checkin = mergeDays(bc.checkin, lc.checkin, sc.checkin);
+    out.posts = mergeList(bc.posts, lc.posts, sc.posts);
+    out.assign = mergeList(bc.assign, lc.assign, sc.assign);
+    out.results = JSON.parse(JSON.stringify(sc.results || {}));
+    for (const [aid, m] of Object.entries(lc.results || {})) for (const [sid, r] of Object.entries(m)) {
+      const br = ((bc.results || {})[aid] || {})[sid]; if (same(br, r)) continue;
+      const sr = (out.results[aid] = out.results[aid] || {})[sid];
+      out.results[aid][sid] = sr ? { ...mergeResult(sr, r), tries: Math.max(sr.tries, r.tries) } : r;
+    }
+    out.credit = JSON.parse(JSON.stringify(sc.credit || {}));
+    for (const [sid, m] of Object.entries(lc.credit || {})) for (const [k, v] of Object.entries(m)) { const c = out.credit[sid] = out.credit[sid] || {}; c[k] = Math.max(c[k] || 0, v); }
+    for (const k of ['name', 'goal', 'race']) if (!same(bc[k], lc[k])) out[k] = lc[k];
+    return out;
+  }
+  function mergeStates(base, local, server) {
+    const out = { ...server };
+    out.classes = mergeList(base.classes, local.classes, server.classes, mergeClass);
+    for (const k of ['lessons', 'sets', 'packs', 'links']) out[k] = mergeList(base[k], local[k], server[k]);
+    if (!same(base.lib, local.lib)) out.lib = local.lib;
+    out.activeClass = local.activeClass;
+    return normalize(out);
+  }
+
   function sampleSets() {
     return [parseSetText('Space words', 'The star our planet goes around | sun\nThe planet we live on | earth\nIt shines in the night sky | moon\nA big ball of rock or gas that goes around a star | planet\nIt carries astronauts into space | rocket\nA person who travels into space | astronaut\nA group of stars that makes a picture | constellation\nA ball of ice and dust with a long tail | comet', 'sample-space')].filter(Boolean);
   }
@@ -388,6 +453,6 @@
     ].filter(Boolean);
   }
 
-  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, driveId, libUrl, MOODS, SET_GAME_IDS, SKILL_IDS, SKILLS4, CREW, normalizePack, parsePack, packText, packStation, speechScore, starsFor, creditStars, crewFor, wordsOf, normalizeSet, parseSetText, setText, spellTarget, quizQuestions, setGames, recordResult, mergeResult, moodsFor, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
+  const api = { uid, clip, today, SKILLS, BADGES, parseNames, newClass, newStudent, emptyState, normalize, normalizeLesson, cleanLink, cleanRepo, libraryFromTree, cleanLib, driveId, libUrl, MOODS, SET_GAME_IDS, mergeStates, SKILL_IDS, SKILLS4, CREW, normalizePack, parsePack, packText, packStation, speechScore, starsFor, creditStars, crewFor, wordsOf, normalizeSet, parseSetText, setText, spellTarget, quizQuestions, setGames, recordResult, mergeResult, moodsFor, parseLessonText, award, classTotal, badgesFor, nextBadge, pickFair, shuffle, makeGroups, attendanceRate, fromClassGrove, scoreQuiz };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.SkyCore = api;
 })(this);

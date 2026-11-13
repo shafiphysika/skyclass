@@ -15,7 +15,8 @@
   // Online mode is optional: without config.js values (or if the library fails to load) everything stays on this device.
   const cfg = window.SKY_CONFIG || {};
   const sb = window.supabase && cfg.supabaseUrl && cfg.supabaseKey ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
-  const cloud = { user: null, rev: 0, status: '', codes: [], res: {}, moods: {}, logins: [], pins: [], fails: [] };
+  const cloud = { user: null, school: null, shared: [], base: null, rev: 0, status: '', codes: [], res: {}, moods: {}, logins: [], pins: [], fails: [], users: [], avatars: {}, coteachers: [], notes: [] };
+  let famExtra = null; // photo, username and notes for the child a code or username opened
   const PIN_PICS = ['🐶', '🐱', '🦊', '🐼', '🐸', '🐵', '🦁', '🐰'];
   let roster = null, pinFor = null, pinTyped = ''; // iPad login in progress
   let fam = null, famCode = null, syncT; // fam: the read-only school a family code unlocked; famCode stays in memory only
@@ -30,7 +31,9 @@
   const student = () => { const c = cls(); return !c ? null : S() === fam ? c.students[0] || null : c.students.find(s => s.id === ui.who) || null; };
   const hash = s => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.codePointAt(0)) >>> 0; return h; };
   const ANIMALS = ['🦊', '🐼', '🐯', '🐸', '🦉', '🐙', '🦄', '🐨', '🐧', '🦁', '🐰', '🐢', '🦋', '🐬', '🐝', '🦕'];
-  const avatar = st => `<span class="ava" style="--h:${hash(st.id) % 360}">${ANIMALS[hash(st.name) % ANIMALS.length]}</span>`;
+  // A child's photo if there is one (only ever a validated data: image), otherwise their animal.
+  const photoOf = sid => cloud.avatars[sid] || (famExtra && fam && fam.classes[0] && fam.classes[0].students[0] && fam.classes[0].students[0].id === sid ? famExtra.avatar : null);
+  const avatar = st => { const p = photoOf(st.id); return p && /^data:image\/(jpeg|png|webp);base64,/.test(p) ? `<span class="ava photo" style="--h:${hash(st.id) % 360}"><img src="${esc(p)}" alt=""></span>` : `<span class="ava" style="--h:${hash(st.id) % 360}">${ANIMALS[hash(st.name) % ANIMALS.length]}</span>`; };
   const niceDate = d => new Date(d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 
   let toastT;
@@ -143,7 +146,8 @@
       <div class="bar"><p>Tap a student to give <b>${skill.icon} ${skill.label}</b>.</p><button class="pill" data-act="giveall">Whole class +1</button><button class="pill" data-act="undo" ${last ? '' : 'disabled'}>Undo</button></div>
       <div class="cards">${c.students.map((s, i) => `<div class="card" style="--h:${hash(s.id) % 360};--i:${i}" data-sid="${esc(s.id)}">
         <button class="give" data-act="give" data-sid="${esc(s.id)}" aria-label="Give ${esc(s.name)} a star">${avatar(s)}<span class="nm">${esc(s.name)}</span><span class="pts">${s.points}</span></button>
-        <button class="minus" data-act="take" data-sid="${esc(s.id)}" aria-label="Take 1 star from ${esc(s.name)}">−</button></div>`).join('')}</div>`;
+        <button class="minus" data-act="take" data-sid="${esc(s.id)}" aria-label="Take 1 star from ${esc(s.name)}">−</button>
+        <button class="prof" data-act="profile" data-sid="${esc(s.id)}" aria-label="${esc(s.name)}: photo and notes">📝</button></div>`).join('')}</div>`;
   }
   function attendHTML(c) {
     const day = C.today(), rec = c.attendance[day] || {};
@@ -254,13 +258,15 @@
   const knownClasses = () => { try { return JSON.parse(localStorage.getItem(KNOWN)) || []; } catch { return []; } };
   function loginHTML() {
     if (!sb) return '';
-    if (roster && pinFor) return `<section class="panel pinpad"><button class="pill" data-act="pinback">← Not ${esc(pinFor.name)}</button><h2 class="h">Hi ${esc(pinFor.name)}! Tap your secret pictures.</h2>
+    if (pinFor) return `<section class="panel pinpad"><button class="pill" data-act="pinback">← Not ${esc(pinFor.name)}</button><h2 class="h">Hi ${esc(pinFor.name)}! Tap your secret pictures.</h2>
       <div class="pinshow">${[0, 1, 2, 3].map(i => `<i>${pinTyped[i] ? PIN_PICS[+pinTyped[i] - 1] : ''}</i>`).join('')}</div>
       <div class="pinkeys">${PIN_PICS.map((p, i) => `<button data-act="pinkey" data-k="${i + 1}" aria-label="Picture ${i + 1}">${p}</button>`).join('')}<button class="pill" data-act="pinclear">Clear</button></div></section>`;
     if (roster) return `<section class="panel"><div class="bar"><h2 class="h">${esc(roster.name)}: tap your name</h2><button class="pill" data-act="rosterout">Change class</button></div>
       <div class="cards">${roster.students.map(s => `<div class="card"><button class="give" data-act="rosterpick" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span></button></div>`).join('') || '<p class="empty">Nobody in this class has a picture PIN yet.</p>'}</div></section>`;
     const known = knownClasses();
-    return `<form class="panel form" data-form="classlogin"><h2 class="h">Join your class</h2>${known.length ? `<div class="chips wide">${known.map(k => `<button type="button" class="btn" data-act="classpick" data-code="${esc(k.code)}">${esc(k.name)}</button>`).join('')}</div>` : ''}
+    return `<form class="panel form" data-form="userlogin"><h2 class="h">Sign in</h2><label>Your username<input name="user" maxlength="20" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="ann601"></label><button class="btn">Next</button>
+        <p class="hint wide">Your username and secret pictures are on the card from your teacher. They work at school and at home.</p></form>
+      <form class="panel form" data-form="classlogin"><h2 class="h">Or join your class</h2>${known.length ? `<div class="chips wide">${known.map(k => `<button type="button" class="btn" data-act="classpick" data-code="${esc(k.code)}">${esc(k.name)}</button>`).join('')}</div>` : ''}
       <label>Class code from your teacher<input name="code" maxlength="8" autocomplete="off" autocapitalize="characters" required placeholder="ABCD2345"></label><button class="btn">Join</button></form>`;
   }
   async function openRoster(code) {
@@ -274,27 +280,35 @@
     render();
   }
   async function tryPin() {
-    const { data, error } = await sb.rpc('sky_pin_login', { p_class: roster.code, p_student: pinFor.id, p_pin: pinTyped });
+    const who = pinFor, pin = pinTyped; if (!who || pin.length !== 4) return;
+    const { data, error } = who.user ? await sb.rpc('sky_user_login', { p_user: who.user, p_pin: pin }) : await sb.rpc('sky_pin_login', { p_class: roster.code, p_student: who.id, p_pin: pin });
+    if (pinFor !== who) return; // the child went back while we were checking
     pinTyped = '';
     if (error) { render(); return toast('Could not reach the class. Try again.'); }
-    if (data === 'LOCKED') { pinFor = null; render(); return toast('Too many wrong tries. Ask your teacher, or wait ten minutes.'); }
+    if (data === 'LOCKED') { pinFor = null; render(); return toast('Too many wrong tries. Ask your teacher to unlock you.'); }
     if (!data) { render(); const p = $('.pinshow'); if (p) { p.classList.add('bad'); } return toast('Those pictures are not right. Try again.'); }
     pinFor = null; await openFamily(data, false, false);
   }
+  const isOwner = () => cloud.user && cloud.school === cloud.user.id;
   function ipadHTML(c) {
     if (!cloud.user || !c || !c.students.length) return '';
     const login = cloud.logins.find(l => l.class_id === c.id), pins = cloud.pins.filter(p => p.class_id === c.id), missing = c.students.filter(s => !pins.some(p => p.student_id === s.id)).length;
-    if (!login) return `<section class="panel"><h3>iPad login for ${esc(c.name)}</h3><p>Students join with a class code, tap their name and enter a 4-picture PIN. No QR codes or long codes to type. Save the site to each iPad's home screen once.</p>
-      <button class="btn" data-act="ipadon">Turn on iPad login</button></section>`;
-    return `<section class="panel"><h3>iPad login for ${esc(c.name)}</h3><p>Class code: <code class="bigcode">${esc(login.code)}</code></p>
-      <p>On each iPad: open <b>${esc(location.host + location.pathname)}</b>, choose Student, enter the code once. The iPad remembers the class.</p>
+    const noUser = c.students.filter(s => !cloud.users.some(u => u.class_id === c.id && u.student_id === s.id)).length;
+    if (!login) return `<section class="panel"><h3>Student sign-in for ${esc(c.name)}</h3><p>Each child gets a username and a 4-picture PIN for school and home, and the class gets a code for shared iPads.</p>
+      ${isOwner() ? '<button class="btn" data-act="ipadon">Turn on student sign-in</button>' : '<p class="hint">The class owner turns this on.</p>'}</section>`;
+    return `<section class="panel"><h3>Student sign-in for ${esc(c.name)}</h3><p>Class code: <code class="bigcode">${esc(login.code)}</code></p>
+      <p>At school or home: open <b>${esc(location.host + location.pathname)}</b>, choose Student (or Parent), and sign in with the username and pictures on the card. On a shared iPad, the class code lets children tap their name instead.</p>
+      ${noUser && isOwner() ? `<p><button class="pill" data-act="mkusers">Make usernames for ${noUser} student${noUser === 1 ? '' : 's'}</button></p>` : ''}
       ${(() => { const locked = c.students.filter(s => cloud.fails.some(x => x.class_id === c.id && x.student_id === s.id)); return locked.length ? `<p class="care">🔒 Locked after too many wrong PINs: ${locked.map(s => esc(s.name)).join(', ')} <button class="pill" data-act="pinunlock">Unlock</button></p>` : ''; })()}
-      <div class="chips"><button class="btn" data-act="pincards">🖨️ Print picture PIN cards</button>${missing ? `<button class="pill" data-act="ipadpins">Make PINs for ${missing} new student${missing === 1 ? '' : 's'}</button>` : ''}<button class="pill danger" data-act="ipadoff">Turn off iPad login</button></div></section>`;
+      <div class="chips"><button class="btn" data-act="pincards">🖨️ Print sign-in cards</button>${isOwner() ? `${missing ? `<button class="pill" data-act="ipadpins">Make PINs for ${missing} new student${missing === 1 ? '' : 's'}</button>` : ''}<button class="pill danger" data-act="ipadoff">Turn off student sign-in</button>` : ''}</div></section>`;
   }
   const newPin = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), b => (b % 8) + 1).join('');
   async function loadLogins() {
-    const [l, p, f] = await Promise.all([sb.from('sky_class_logins').select('code,class_id'), sb.from('sky_pins').select('class_id,student_id,pin'), sb.from('sky_pin_fails').select('class_id,student_id,fails,day_fails')]);
-    cloud.logins = l.data || []; cloud.pins = p.data || []; cloud.fails = (f.data || []).filter(x => x.fails >= 8 || x.day_fails >= 20);
+    const mine = r => (r.data || []).filter(x => !x.owner || x.owner === cloud.school);
+    const [l, p, f, u, a] = await Promise.all([sb.from('sky_class_logins').select('owner,code,class_id'), sb.from('sky_pins').select('owner,class_id,student_id,pin'), sb.from('sky_pin_fails').select('owner,class_id,student_id,fails,day_fails'), sb.from('sky_usernames').select('owner,username,class_id,student_id'), sb.from('sky_avatars').select('owner,class_id,student_id,data')]);
+    cloud.logins = mine(l); cloud.pins = mine(p); cloud.fails = mine(f).filter(x => x.fails >= 8 || x.day_fails >= 20); cloud.users = mine(u);
+    cloud.avatars = {}; mine(a).forEach(x => { cloud.avatars[x.student_id] = x.data; });
+    if (isOwner()) { const { data } = await sb.from('sky_coteachers').select('email,classes'); cloud.coteachers = data || []; } else cloud.coteachers = [];
   }
 
   /* ---------- practice: question sets, assignments and results ---------- */
@@ -385,6 +399,13 @@
       <section class="panel"><h3>Backup</h3><p>Skyclass keeps everything in this browser. Download a backup before clearing browser data or changing devices.</p>
         <div class="chips"><button class="btn" data-act="backup">Download backup</button><button class="pill" data-act="restore">Restore a backup</button></div></section>${accountHTML(c)}`;
   }
+  function coteachHTML() {
+    return `<section class="panel"><h3>Co-teachers</h3><p>Invite a teacher by email and choose their classes. They sign in with their own account (a confirmed email) and can give points, take attendance, write notes and run missions in those classes. They cannot delete classes or change PINs.</p>
+      ${cloud.coteachers.map(t => `<div class="row"><span class="nm"><b>${esc(t.email)}</b><small>${t.classes.map(id => esc((state.classes.find(k => k.id === id) || {}).name || 'removed class')).join(', ') || 'no classes'}</small></span><button class="x" data-act="uninvite" data-email="${esc(t.email)}" aria-label="Remove ${esc(t.email)}">✕</button></div>`).join('')}
+      <form class="form" data-form="invite"><label class="wide">Co-teacher's email<input type="email" name="email" required></label>
+        <fieldset class="wide gamepick"><legend>Classes they can see</legend>${state.classes.map(k => `<label class="check"><input type="checkbox" name="cls" value="${esc(k.id)}"> ${esc(k.name)}</label>`).join('')}</fieldset>
+        <button class="btn">Invite or update</button></form></section>`;
+  }
   function accountHTML(c) {
     if (!sb) return '<section class="panel"><h3>Online accounts</h3><p>Online saving is not connected on this copy of Skyclass, so everything stays on this device.</p></section>';
     if (!cloud.user) return `<section class="panel"><h3>Save online and share with families</h3><p>Sign in to keep your classes online and to give each family a code for their own devices.</p>
@@ -392,7 +413,9 @@
       <button class="btn">Sign in</button><button type="button" class="pill" data-act="signup">Create account</button></form></section>`;
     const row = s => { const k = cloud.codes.find(x => x.class_id === c.id && x.student_id === s.id);
       return `<div class="row"><span class="nm">${esc(s.name)}</span>${k ? `<code>${esc(k.code)}</code><button class="pill" data-act="copycode" data-code="${esc(k.code)}">Copy</button>` : ''}<button class="pill" data-act="recode" data-sid="${esc(s.id)}">${k ? 'New code' : 'Make code'}</button></div>`; };
-    return `<section class="panel"><h3>Signed in as ${esc(cloud.user.email)}</h3><p id="sync">${esc(cloud.status)}</p><button class="pill" data-act="signout">Sign out</button></section>
+    const schools = cloud.shared.length ? `<div class="chips"><button class="${isOwner() ? 'btn' : 'pill'}" data-act="school" data-owner="${esc(cloud.user.id)}">My classes</button>${cloud.shared.map(s => `<button class="${cloud.school === s.owner ? 'btn' : 'pill'}" data-act="school" data-owner="${esc(s.owner)}">Shared by ${esc(s.teacher)}</button>`).join('')}</div>` : '';
+    return `<section class="panel"><h3>Signed in as ${esc(cloud.user.email)}</h3><p id="sync">${esc(cloud.status)}</p>${schools}${isOwner() ? '' : '<p class="hint">You are working in classes shared with you. Question sets, missions and class lists are managed by the class owner.</p>'}<button class="pill" data-act="signout">Sign out</button></section>
+      ${isOwner() ? coteachHTML() : ''}
       ${c && c.students.length ? `<section class="panel"><h3>Family codes for ${esc(c.name)}</h3><p>A code opens one child's stars, attendance, homework and lessons on any device. At ${esc(location.host + location.pathname)} choose Student or Parent, then enter the code. Treat a code like a password. Making a new code switches the old one off.</p>
         <div class="chips"><button class="btn" data-act="makecodes">Make codes for everyone</button></div><div class="rows">${c.students.map(row).join('')}</div></section>` : ''}${ipadHTML(c)}`;
   }
@@ -400,7 +423,7 @@
   /* ---------- student and parent ---------- */
   function whoHTML(title) {
     const codeForm = sb ? '<form class="panel form" data-form="famcode"><h2 class="h">Enter your family code</h2><label>Code from your teacher<input name="code" maxlength="12" autocomplete="off" autocapitalize="characters" required placeholder="ABCDE23456"></label><label class="check wide"><input type="checkbox" name="keep"> Remember the code on this device. Only tick this on your own phone or computer.</label><button class="btn">Open</button></form>' : '';
-    const join = loginHTML(); if (roster) return join;
+    const join = loginHTML(); if (roster || pinFor) return join;
     if (!state.classes.length) return join + codeForm || '<p class="empty">Your teacher has not set up a class on this device yet.</p>';
     const c = cls();
     return `${join}${codeForm}<h2 class="h">${codeForm ? 'Or, on the class device: ' : ''}${title}</h2><label class="pick block">Class <select data-change="class">${state.classes.map(k => `<option value="${esc(k.id)}" ${k.id === c.id ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></label>
@@ -421,7 +444,8 @@
     const banner = todoMissions ? `🚀 ${todoMissions === 1 ? 'A story mission is' : todoMissions + ' story missions are'} waiting. Earn stars and meet a new crew member!` : todoSets ? `🎯 You have ${todoSets} practice ${todoSets === 1 ? 'game' : 'games'} waiting. Let's go!` : '';
     return `${checkin}${banner ? `<button class="panel todo" data-act="tab" data-tab="practice">${banner}</button>` : ''}<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
         ${next ? `<div class="meter"><i style="width:${Math.round((s.points - base) / (next.at - base) * 100)}%"></i></div><p>${next.at - s.points} more to become a ${next.icon} ${next.label}</p>` : '<p>You have every badge. Sky captain!</p>'}</div>
-        <button class="pill" data-act="notme">${fam ? 'Use another code' : 'Not me'}</button></section>
+        <div class="mebtns">${fam ? '<label class="pill filepick">📷 Change my picture<input type="file" accept="image/*" data-change="mypic" hidden></label>' : ''}<button class="pill" data-act="notme">${fam ? 'Sign out' : 'Not me'}</button></div></section>
+      ${fam && famExtra && famExtra.username ? `<p class="hint">Your username: <b>${esc(famExtra.username)}</b>. It works at home too.</p>` : ''}
       <div class="badges">${badgesHTML(s.points)}</div>${crewHTML(c, s)}${skyHTML(c, false)}
       <h3 class="h">Why I got stars</h3>${logHTML(s, 8)}`;
   }
@@ -430,10 +454,10 @@
     const c = cls(), s = student();
     if (!s) return whoHTML('Choose your child');
     const rate = C.attendanceRate(c, s.id), today = (c.attendance[C.today()] || {})[s.id];
-    return `<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p>${esc(c.name)}</p></div><button class="pill" data-act="notme">${fam ? 'Use another code' : 'Choose another child'}</button></section>
+    return `<section class="mecard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p>${esc(c.name)}</p></div><button class="pill" data-act="notme">${fam ? 'Sign out' : 'Choose another child'}</button></section>
       <div class="stats"><div><b>${s.points}</b>stars earned</div><div><b>${rate === null ? 'n/a' : rate + '%'}</b>${rate === null ? 'no attendance recorded yet' : 'attendance'}</div>
         <div><b>${today ? { p: 'Present', l: 'Late', a: 'Away' }[today] : 'n/a'}</b>today</div></div>
-      <div class="badges">${badgesHTML(s.points)}</div>
+      <div class="badges">${badgesHTML(s.points)}</div>${fam && famExtra ? `<h3 class="h">Notes from the teacher</h3>${famExtra.notes.length ? `<div class="notes">${famExtra.notes.map(n => noteHTML(n, false)).join('')}</div>` : '<p class="empty">No notes yet.</p>'}` : ''}
       <div class="two"><section><h3 class="h">Recent stars</h3>${logHTML(s, 12)}</section><section><h3 class="h">Homework and news</h3><div class="posts">${postsHTML(c, false)}</div></section></div>
       <div class="two"><section><h3 class="h">Practice</h3>${c.assign.filter(a => setById(a.setId)).map(a => { const r = resultFor(c, a.id, s.id); return `<div class="row"><span class="big sm">${GAME(a.game).icon}</span><span class="nm"><b>${esc(setById(a.setId).title)}</b><small>${GAME(a.game).title}${a.due ? ', due ' + niceDate(a.due + 'T12:00') : ''}</small></span><span class="done">${r ? `Best ${r.best} of ${r.total}, ${r.tries} ${r.tries === 1 ? 'try' : 'tries'}` : 'Not started'}</span></div>`; }).join('') || '<p class="empty">No practice assigned.</p>'}</section>
         <section><h3 class="h">Morning check-ins</h3>${(() => { const days = [...Array(7)].map((_, i) => C.today(new Date(Date.now() - i * 864e5))).filter(d => moodOf(c, s.id, d)); return days.length ? `<div class="rows">${days.map(d => `<div class="row"><span class="nm">${niceDate(d + 'T12:00')}</span><span class="mood">${C.MOODS[moodOf(c, s.id, d)][0]}</span>${C.MOODS[moodOf(c, s.id, d)][1]}</div>`).join('')}</div>` : '<p class="empty">No check-ins this week.</p>'; })()}</section></div>`;
@@ -565,21 +589,34 @@
     backup() { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'skyclass', saved: new Date().toISOString(), state })], { type: 'application/json' })); a.download = `skyclass-backup-${C.today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); },
     restore() { pickFile(o => { if (!o || o.app !== 'skyclass' || !o.state) return toast('That is not a Skyclass backup file.'); if (!confirm('Replace everything on this device with the backup?')) return; state = C.normalize(o.state); save(); render(); toast('Backup restored.'); }); },
     who(b) { ui.who = b.dataset.sid; save(); render(); },
-    notme() { ui.who = null; ui.code = null; fam = null; famCode = null; pinFor = null; pinTyped = ''; saveLocal(); render(); },
+    notme() { ui.who = null; ui.code = null; fam = null; famCode = null; famExtra = null; pinFor = null; pinTyped = ''; saveLocal(); render(); },
     signup(b) { signIn(b.form, true); },
-    async signout() { clearTimeout(syncT); await sb.auth.signOut(); cloud.user = null; cloud.codes = []; cloud.res = {}; cloud.moods = {}; render(); toast('Signed out. Your classes are still on this device.'); },
+    async signout() { clearTimeout(syncT); await sb.auth.signOut(); Object.assign(cloud, { user: null, school: null, shared: [], base: null, codes: [], res: {}, moods: {}, logins: [], pins: [], fails: [], users: [], avatars: {}, coteachers: [], notes: [] }); render(); toast('Signed out. Your classes are still on this device.'); },
     async makecodes() {
-      const c = cls(), rows = c.students.filter(s => !cloud.codes.some(k => k.class_id === c.id && k.student_id === s.id)).map(s => ({ code: newCode(), class_id: c.id, student_id: s.id }));
+      const c = cls(), rows = c.students.filter(s => !cloud.codes.some(k => k.class_id === c.id && k.student_id === s.id)).map(s => ({ code: newCode(), owner: cloud.school, class_id: c.id, student_id: s.id }));
       if (!rows.length) return toast('Everyone already has a code.');
       const { error } = await sb.from('sky_codes').insert(rows); if (error) return toast('Codes were not made. ' + error.message);
       await loadCodes(); render(); toast(`Made ${rows.length} code${rows.length === 1 ? '' : 's'}.`);
     },
     async recode(b) {
-      const c = cls(), m = { class_id: c.id, student_id: b.dataset.sid };
+      const c = cls(), m = { owner: cloud.school, class_id: c.id, student_id: b.dataset.sid };
       await sb.from('sky_codes').delete().match(m);
       const { error } = await sb.from('sky_codes').insert({ code: newCode(), ...m }); if (error) toast('Code was not made. ' + error.message);
       await loadCodes(); render();
     },
+    profile(b) { profileSid = b.dataset.sid; paintProfile(); },
+    async delpic() { const c = cls(); await sb.from('sky_avatars').delete().match({ owner: cloud.school, class_id: c.id, student_id: profileSid }); delete cloud.avatars[profileSid]; paintProfile(); render(); },
+    async delnote(b) { if (!confirm('Delete this note? The family will no longer see it.')) return; const { error } = await sb.from('sky_notes').delete().eq('id', b.dataset.id); if (error) return toast('Could not delete. ' + error.message); cloud.notes = cloud.notes.filter(n => n.id !== b.dataset.id); paintProfile(); },
+    async notephoto(b) {
+      const back = dlg.open && profileSid && ui.role === 'teacher';
+      const { data } = fam ? await sb.rpc('sky_family_note_photo', { p_code: famCode, p_note: b.dataset.id }) : await sb.from('sky_notes').select('photo').eq('id', b.dataset.id).maybeSingle();
+      const src = fam ? data : data && data.photo; if (!src || !/^data:image\/(jpeg|png|webp);base64,/.test(src)) return toast('That photo could not be opened.');
+      openDlg(`<div class="phead"><span>📷 Photo</span><button class="pill" data-act="${back ? 'profileback' : 'closedlg'}">${back ? 'Back' : 'Close'}</button></div><img class="viewer" src="${esc(src)}" alt="Photo from class"><span></span>`, 'player');
+    },
+    profileback() { paintProfile(); },
+    async school(b) { if (b.dataset.owner === cloud.school) return; if (ui.dirty) await push(); setStatus('Loading…'); await openSchool(b.dataset.owner); toast(isOwner() ? 'Your classes.' : 'Shared classes opened.'); },
+    async uninvite(b) { if (!confirm(`Stop sharing classes with ${b.dataset.email}?`)) return; await sb.from('sky_coteachers').delete().eq('email', b.dataset.email); await loadLogins(); render(); },
+    async mkusers() { const c = cls(); const { data, error } = await sb.rpc('sky_make_usernames', { p_class: c.id }); if (error) return toast('Usernames could not be made. ' + error.message); await loadLogins(); render(); toast(`Made ${data} username${data === 1 ? '' : 's'}.`); },
     mission(b) { missionPack = packById(b.dataset.pack); if (missionPack) paintMission(); },
     readstory() { endGame(); openDlg(`<div class="phead"><span>📖 ${esc(missionPack.title)}</span><button class="pill" data-act="backmission">Back to mission</button></div><div id="game" class="gamebox"></div><span></span>`, 'player'); stopGame = SkyMissions.reader($('#game'), missionPack); },
     backmission() { endGame(); paintMission(); },
@@ -613,14 +650,14 @@
     async ipadpins() {
       const c = cls(), rows = c.students.filter(s => !cloud.pins.some(p => p.class_id === c.id && p.student_id === s.id)).map(s => ({ class_id: c.id, student_id: s.id, pin: newPin() }));
       if (rows.length) { const { error } = await sb.from('sky_pins').insert(rows); if (error) return toast('PINs could not be made. ' + error.message); }
-      await loadLogins(); render(); toast('iPad login is on. Print the PIN cards for your class.'); },
+      await sb.rpc('sky_make_usernames', { p_class: c.id }); await loadLogins(); render(); toast('Student sign-in is on. Print the sign-in cards for your class.'); },
     async pinunlock() { const c = cls(); const { error } = await sb.from('sky_pin_fails').delete().match({ class_id: c.id }); if (error) return toast('Could not unlock. ' + error.message); await loadLogins(); render(); toast('Unlocked. They can try their PIN again.'); },
     async ipadoff() { const c = cls(); if (!confirm(`Turn off iPad login for ${c.name}? The class code and picture PINs stop working. Turning it on again makes new ones.`)) return; await sb.from('sky_class_logins').delete().match({ class_id: c.id }); await sb.from('sky_pins').delete().match({ class_id: c.id }); await sb.from('sky_pin_fails').delete().match({ class_id: c.id }); await loadLogins(); render(); },
     pincards() {
       const c = cls(), login = cloud.logins.find(l => l.class_id === c.id), w = window.open('', '_blank'); if (!w || !login) return toast('Allow pop-ups for this site to print PIN cards.');
-      const cards = c.students.map(s => { const p = cloud.pins.find(x => x.class_id === c.id && x.student_id === s.id); return p ? `<div class="card"><b>${esc(s.name)}</b><span class="pics">${[...p.pin].map(d => PIN_PICS[+d - 1]).join(' ')}</span><small>Class code ${esc(login.code)}</small></div>` : ''; }).join('');
-      w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(c.name)} PIN cards</title><style>body{font:16px system-ui,sans-serif;margin:1cm}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.4cm}.card{border:2px dashed #888;border-radius:12px;padding:.4cm;display:grid;gap:.2cm;text-align:center;break-inside:avoid}.card b{font-size:20px}.pics{font-size:38px;letter-spacing:.1em}small{color:#555}@media print{button{display:none}}</style>
-        <button onclick="print()">Print</button><h2>${esc(c.name)}: secret picture PINs</h2><p>Site: ${esc(location.host + location.pathname)}. Cut out the cards. Each child taps their name, then their four pictures in order.</p><div class="grid">${cards}</div>`);
+      const cards = c.students.map(s => { const p = cloud.pins.find(x => x.class_id === c.id && x.student_id === s.id), u = cloud.users.find(x => x.class_id === c.id && x.student_id === s.id); return p ? `<div class="card"><b>${esc(s.name)}</b>${u ? `<span class="user">Username: <b>${esc(u.username)}</b></span>` : ''}<span class="pics">${[...p.pin].map(d => PIN_PICS[+d - 1]).join(' ')}</span><small>Class code ${esc(login.code)}</small></div>` : ''; }).join('');
+      w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(c.name)} PIN cards</title><style>body{font:16px system-ui,sans-serif;margin:1cm}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.4cm}.card{border:2px dashed #888;border-radius:12px;padding:.4cm;display:grid;gap:.2cm;text-align:center;break-inside:avoid}.card b{font-size:20px}.user{font-size:15px}.user b{font-size:18px;font-family:monospace}.pics{font-size:38px;letter-spacing:.1em}small{color:#555}@media print{button{display:none}}</style>
+        <button onclick="print()">Print</button><h2>${esc(c.name)}: secret picture PINs</h2><p>Site: ${esc(location.host + location.pathname)}. Cut out the cards. Children sign in at school or home with their username, then tap their four pictures in order. Parents use the same card to see their child's page.</p><div class="grid">${cards}</div>`);
       w.document.close(); },
     setplay(b) {
       const set = setById(b.dataset.set), g = GAME(b.dataset.game); if (!set || !g) return;
@@ -689,7 +726,7 @@
   function setStatus(t) { cloud.status = t; const el = $('#sync'); if (el) el.textContent = t; }
   const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
   // Mission stars earned at home become class points on the teacher's device, once each.
-  function creditAll() { let n = 0; for (const c of state.classes) n += C.creditStars(c, state.packs, getRes(c)); if (n) save(); return n; }
+  function creditAll() { if (cloud.user && !isOwner()) return 0; /* only the owner's screen credits, so stars are never counted twice */ let n = 0; for (const c of state.classes) n += C.creditStars(c, state.packs, getRes(c)); if (n) save(); return n; }
   async function loadExtras() {
     if (!cloud.user) return;
     const since = C.today(new Date(Date.now() - 14 * 864e5));
@@ -715,27 +752,88 @@
       <div class="cards kiosk">${c.students.map(s => { const m = moodOf(c, s.id, day); return `<div class="card"><button class="give${m ? ' did' : ''}" data-act="kioskpick" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span>${m ? `<span class="mood">${C.MOODS[m][0]}</span>` : ''}</button></div>`; }).join('')}</div><span></span>`, 'player');
   }
   function tone() { try { const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain(); o.frequency.value = 784; g.gain.value = .12; o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime + .15); } catch { /* sound is optional */ } }
-  async function loadCodes() { const { data } = await sb.from('sky_codes').select('code,class_id,student_id'); cloud.codes = data || []; }
+  const NOTE_KINDS = { star: ['⭐', 'Great work'], kind: ['💛', 'Kindness'], work: ['📚', 'Hard work'], remind: ['🔔', 'Reminder'], moment: ['📸', 'Class moment'] };
+  const noteHTML = (n, teacher) => `<article class="note k-${esc(n.kind)}"><b>${(NOTE_KINDS[n.kind] || NOTE_KINDS.moment)[0]} ${(NOTE_KINDS[n.kind] || NOTE_KINDS.moment)[1]}</b>${n.body ? `<p>${esc(n.body)}</p>` : ''}
+    <small>${niceDate(n.t)}</small>${n.photo ? `<button class="pill" data-act="notephoto" data-id="${esc(n.id)}">📷 See photo</button>` : ''}${teacher ? `<button class="x" data-act="delnote" data-id="${esc(n.id)}" aria-label="Delete note">✕</button>` : ''}</article>`;
+  // Shrinks a photo in the browser before it is sent: small, private, and quick on school wifi.
+  function shrinkImage(file, max, limit) {
+    return new Promise((resolve, reject) => {
+      const img = new Image(), url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const k = Math.min(1, max / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(img.width * k)); cv.height = Math.max(1, Math.round(img.height * k));
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        for (const q of [.82, .7, .58, .45]) { const d = cv.toDataURL('image/jpeg', q); if (d.length < limit) return resolve(d); }
+        reject(new Error('too big'));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('not an image')); };
+      img.src = url;
+    });
+  }
+  let profileSid = null;
+  async function paintProfile() {
+    const c = cls(), s = c && c.students.find(x => x.id === profileSid); if (!s) return;
+    const u = cloud.users.find(x => x.class_id === c.id && x.student_id === s.id), p = cloud.pins.find(x => x.class_id === c.id && x.student_id === s.id);
+    const notes = cloud.notes.filter(n => n.class_id === c.id && n.student_id === s.id);
+    openDlg(`<div class="phead"><span>${esc(s.name)}</span><button class="pill" data-act="closedlg">Close</button></div>
+      <div class="profile"><section class="panel pcard">${avatar(s)}<div><h2>${esc(s.name)}</h2><p class="bigpts"><b>${s.points}</b> stars</p>
+        ${u ? `<p>Username <b>${esc(u.username)}</b>${p ? ` · PIN ${[...p.pin].map(d => PIN_PICS[+d - 1]).join('')}` : ''}</p>` : ''}
+        ${cloud.user ? `<div class="chips"><label class="pill filepick">📷 Take or choose photo<input type="file" accept="image/*" capture="user" data-change="kidpic" hidden></label>${cloud.avatars[s.id] ? '<button class="pill" data-act="delpic">Remove photo</button>' : ''}</div>` : ''}</div></section>
+        ${cloud.user ? `<form class="panel form" data-form="note"><h3 class="wide">Add a note for ${esc(s.name.split(' ')[0])}'s family</h3>
+          <div class="chips wide kinds">${Object.entries(NOTE_KINDS).map(([k, [ic, l]], i) => `<label class="check"><input type="radio" name="kind" value="${k}" ${i ? '' : 'checked'}> ${ic} ${l}</label>`).join('')}</div>
+          <label class="wide">Note<textarea name="body" rows="3" maxlength="500" placeholder="Helped a classmate tidy up after art."></textarea></label>
+          <label class="wide">Photo (optional)<input type="file" name="photo" accept="image/*" capture="environment"></label>
+          <button class="btn">Save note</button></form>
+          <h3 class="h">Notes</h3>${notes.length ? `<div class="notes">${notes.map(n => noteHTML(n, true)).join('')}</div>` : '<p class="empty">No notes yet. Parents see notes and photos on their child\'s page only.</p>'}`
+        : '<p class="empty">Sign in under Classes to add photos and notes. They are saved online so families can see them.</p>'}</div><span></span>`, 'player');
+  }
+  async function loadNotes() {
+    if (!cloud.user) return;
+    const { data } = await sb.from('sky_notes').select('id,owner,class_id,student_id,kind,body,has_photo,created_at');
+    cloud.notes = (data || []).filter(n => n.owner === cloud.school).map(n => ({ id: n.id, class_id: n.class_id, student_id: n.student_id, kind: n.kind, body: n.body, photo: n.has_photo, t: Date.parse(n.created_at) || 0 })).sort((a, b) => b.t - a.t);
+  }
+  const clone = x => JSON.parse(JSON.stringify(x));
+  const BASEKEY = 'skyclass-base';
+  function setBase(s) { cloud.base = clone(s); try { localStorage.setItem(BASEKEY, JSON.stringify({ school: cloud.school, state: cloud.base })); } catch { /* merging falls back to the server copy */ } }
+  function getBase() { if (cloud.base) return cloud.base; try { const b = JSON.parse(localStorage.getItem(BASEKEY)); if (b && b.school === cloud.school) return C.normalize(b.state); } catch { /* none saved */ } return null; }
+  async function loadSchool() {
+    if (cloud.school === cloud.user.id) { const { data, error } = await sb.from('sky_schools').select('state,rev').eq('owner', cloud.user.id).maybeSingle(); return error ? { error } : { data }; }
+    const { data, error } = await sb.rpc('sky_load_shared', { p_owner: cloud.school }); return error ? { error } : { data };
+  }
+  async function loadCodes() { const { data } = await sb.from('sky_codes').select('owner,code,class_id,student_id'); cloud.codes = (data || []).filter(k => !k.owner || k.owner === cloud.school); }
+  // Saves this device's copy. If another device or co-teacher saved first, both sets of changes are merged and saved again.
   async function push() {
     if (!cloud.user) return;
-    const { data, error } = await sb.rpc('sky_save', { p_state: state, p_rev: cloud.rev });
-    if (error) return setStatus('Not saved online yet. Your changes are safe on this device.');
-    // shortcut: no merging. If another device saved first, its copy wins. Upgrade if two teachers ever edit one school at once.
-    if (data === null) { toast('This school was changed on another device. Loading that version.'); return pull(true); }
-    cloud.rev = ui.rev = data; ui.dirty = false; ui.owner = cloud.user.id; saveLocal(); setStatus('Saved online');
+    for (let tries = 0; tries < 4; tries++) {
+      const own = cloud.school === cloud.user.id;
+      const { data, error } = own ? await sb.rpc('sky_save', { p_state: state, p_rev: cloud.rev }) : await sb.rpc('sky_save_shared', { p_owner: cloud.school, p_state: state, p_rev: cloud.rev });
+      if (error) return setStatus('Not saved online yet. Your changes are safe on this device.');
+      if (data !== null) { cloud.rev = ui.rev = data; ui.dirty = false; ui.owner = cloud.user.id; ui.school = cloud.school; setBase(state); saveLocal(); setStatus('Saved online'); return; }
+      const fresh = await loadSchool(); if (fresh.error || !fresh.data) return setStatus('Could not reach online storage. Working from this device.');
+      const server = C.normalize(fresh.data.state);
+      state = C.mergeStates(getBase() || server, state, server); cloud.rev = fresh.data.rev; render();
+    }
+    setStatus('Busy saving. Your changes are safe on this device and will be sent again.');
   }
   async function pull(force) {
-    const { data, error } = await sb.from('sky_schools').select('state,rev').maybeSingle();
+    const { data, error } = await loadSchool();
     if (error) return setStatus('Could not reach online storage. Working from this device.');
-    if (!data) { cloud.rev = 0; return push(); } // first sign-in: this device becomes the online copy
-    if (!force && ui.owner !== cloud.user.id && state.classes.length && !confirm('This account already has classes saved online. Replace the classes on this device with them? Cancel keeps this device as it is and signs you out.')) return acts.signout();
-    state = C.normalize(data.state); cloud.rev = ui.rev = data.rev; ui.dirty = false; ui.owner = cloud.user.id; last = null; saveLocal(); setStatus('Saved online'); render();
+    if (!data) { if (cloud.school !== cloud.user.id) return setStatus('Those classes are no longer shared with you.'); cloud.rev = 0; return push(); } // first sign-in: this device becomes the online copy
+    if (!force && cloud.school === cloud.user.id && ui.owner !== cloud.user.id && state.classes.length && !confirm('This account already has classes saved online. Replace the classes on this device with them? Cancel keeps this device as it is and signs you out.')) return acts.signout();
+    state = C.normalize(data.state); cloud.rev = ui.rev = data.rev; ui.dirty = false; ui.owner = cloud.user.id; ui.school = cloud.school; last = null; setBase(state); saveLocal(); setStatus('Saved online'); render();
+  }
+  async function openSchool(owner) {
+    cloud.school = owner; cloud.base = null;
+    if (ui.owner === cloud.user.id && (ui.school || cloud.user.id) === owner && ui.dirty) { cloud.rev = ui.rev || 0; await push(); } else await pull(); // unsent edits from this device go up first
+    if (cloud.user) { await loadCodes(); await loadExtras(); await loadLogins(); await loadNotes(); if (isOwner()) creditAll(); }
+    render();
   }
   async function startSync(user) {
     cloud.user = user;
-    if (ui.owner === user.id && ui.dirty) { cloud.rev = ui.rev || 0; await push(); } else await pull(); // unsent edits from this device go up first
-    if (cloud.user) { await loadCodes(); await loadExtras(); await loadLogins(); creditAll(); }
-    render();
+    const { data } = await sb.rpc('sky_shared_schools'); cloud.shared = Array.isArray(data) ? data : [];
+    const back = ui.school && (ui.school === user.id || cloud.shared.some(s => s.owner === ui.school)) ? ui.school : user.id;
+    await openSchool(back);
   }
   async function signIn(f, create) {
     if (!f.reportValidity()) return;
@@ -757,7 +855,9 @@
       if (fam.classes[0]) C.creditStars(fam.classes[0], fam.packs, (aid, s) => (fam.classes[0].results[aid] || {})[s]); // shows stars the teacher's device has not collected yet
     }
     if (!data || !fam.classes[0] || !fam.classes[0].students[0]) { ui.code = null; fam = null; famCode = null; saveLocal(); render(); return toast('That code did not work. Check it with your teacher.'); }
-    fam.classes[0].total = data.class.total; famCode = code; ui.code = keep ? code : null; saveLocal(); render();
+    fam.classes[0].total = data.class.total; famCode = code; ui.code = keep ? code : null;
+    const ex = await sb.rpc('sky_family_extra', { p_code: code }); famExtra = ex.data || { avatar: null, username: null, notes: [] };
+    saveLocal(); render();
   }
   function afterAward(c) { const won = C.classTotal(c) >= c.goal.target; if (won && !wonAt[c.id]) { party(); toast(`Goal reached: ${c.goal.reward}!`); } wonAt[c.id] = won; save(); refreshSky(c); const u = app.querySelector('[data-act="undo"]'); if (u) u.disabled = !last; }
 
@@ -776,6 +876,25 @@
       state = C.normalize(state); closeDlg(); toast(`Saved "${p.title}". Press Start for your class when you are ready.`);
     },
     classlogin(f) { openRoster(f.code.value); return false; },
+    userlogin(f) { const u = f.user.value.trim().toLowerCase(); if (!/^[a-z][a-z0-9]{2,19}$/.test(u)) return toast('Check your username on your card.'), false; pinFor = { user: u, name: u }; pinTyped = ''; render(); return false; },
+    note(f) {
+      const c = cls(), sid = profileSid, file = f.photo.files[0], btn = f.querySelector('.btn'); btn.disabled = true;
+      (async () => {
+        let photo = null;
+        if (file) try { photo = await shrinkImage(file, 1000, 390000); } catch { btn.disabled = false; return toast('That photo could not be used. Try another one.'); }
+        const row = { owner: cloud.school, class_id: c.id, student_id: sid, kind: f.kind.value, body: f.body.value.trim().slice(0, 500), photo };
+        const { error } = await sb.from('sky_notes').insert(row); btn.disabled = false;
+        if (error) return toast('The note was not saved. ' + error.message);
+        await loadNotes(); paintProfile(); toast('Note saved. The family will see it.');
+      })();
+      return false;
+    },
+    invite(f) {
+      const email = f.email.value.trim().toLowerCase(), classes = [...f.querySelectorAll('[name=cls]:checked')].map(x => x.value);
+      if (email === (cloud.user.email || '').toLowerCase()) return toast('That is your own email.'), false;
+      sb.from('sky_coteachers').upsert({ owner: cloud.user.id, email, classes }).then(async ({ error }) => { if (error) return toast('Could not invite. ' + error.message); await loadLogins(); render(); toast(`${email} can now sign in and see ${classes.length} class${classes.length === 1 ? '' : 'es'}.`); });
+      return false;
+    },
     set(f) {
       const id = f.id.value || undefined, set = C.parseSetText(f.title.value, f.text.value, id); if (!set) return toast('Write at least one line.'), false;
       const i = state.sets.findIndex(x => x.id === id); if (i >= 0) state.sets[i] = set; else state.sets.push(set);
@@ -793,6 +912,18 @@
 
   document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b && !b.disabled && acts[b.dataset.act]) acts[b.dataset.act](b); });
   document.addEventListener('submit', e => { const f = e.target, h = forms[f.dataset.form]; if (!h) return; e.preventDefault(); if (h(f) !== false) { save(); render(); } });
+  document.addEventListener('change', async e => {
+    const kind = e.target.dataset.change; if (kind !== 'mypic' && kind !== 'kidpic') return;
+    const file = e.target.files[0]; if (!file) return;
+    let data; try { data = await shrinkImage(file, 192, 58000); } catch { return toast('That picture could not be used. Try another one.'); }
+    if (kind === 'mypic') {
+      const { data: ok } = await sb.rpc('sky_family_avatar', { p_code: famCode, p_data: data }); if (!ok) return toast('Your picture could not be saved. Try again.');
+      famExtra.avatar = data; render(); toast('New picture saved!');
+    } else {
+      const c = cls(); const { error } = await sb.from('sky_avatars').upsert({ owner: cloud.school, class_id: c.id, student_id: profileSid, data });
+      if (error) return toast('The photo was not saved. ' + error.message); cloud.avatars[profileSid] = data; paintProfile(); render(); toast('Photo saved.');
+    }
+  });
   document.addEventListener('change', e => { if (e.target.dataset.change === 'class') { state.activeClass = e.target.value; ui.who = ui.role === 'teacher' ? ui.who : null; last = null; save(); render(); } });
   document.addEventListener('keydown', e => { if (!player || e.target.closest('input,textarea')) return; if (e.key === 'ArrowRight' && player.i < player.lesson.slides.length) acts.pnext(); if (e.key === 'ArrowLeft') acts.pprev(); });
   dlg.addEventListener('close', () => { endGame(); player = null; });

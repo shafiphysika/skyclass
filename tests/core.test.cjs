@@ -203,3 +203,29 @@ test('mission stars become points once, improvements add, crew unlocks', () => {
   assert.equal(again.credit[sid]['walk1:bonus'], 3); assert.equal(again.assign.length, 4);
   assert.equal(C.normalize({ ...n, packs: [] }).classes[0].assign.length, 0, 'deleting the story removes its stations');
 });
+
+test('merging two devices keeps both sides\' changes', () => {
+  const base = C.emptyState(); const c = C.newClass('601', ['Ann', 'Bo', 'Cy']); base.classes.push(c); base.activeClass = c.id;
+  const [ann, bo, cy] = c.students.map(s => s.id);
+  const B = C.normalize(JSON.parse(JSON.stringify(base)));
+  const L = C.normalize(JSON.parse(JSON.stringify(base))), S = C.normalize(JSON.parse(JSON.stringify(base)));
+  const lc = L.classes[0], sc = S.classes[0];
+  C.award(lc, ann, 2, 'Local star', 1000); C.award(sc, ann, 3, 'Server star', 2000); C.award(sc, bo, 1, 'Server', 2001);
+  lc.attendance['2026-11-19'] = { [ann]: 'p' }; sc.attendance['2026-11-19'] = { [bo]: 'a' };
+  lc.students = lc.students.filter(s => s.id !== cy); // deleted here
+  lc.students.push(C.newStudent('Dee')); sc.students.push(C.newStudent('Eve')); // added on each side
+  lc.posts.push({ id: 'p1', kind: 'news', text: 'Local news', due: '', t: 1 }); sc.posts.push({ id: 'p2', kind: 'news', text: 'Server news', due: '', t: 2 });
+  sc.goal = { target: 500, reward: 'Picnic' };
+  L.sets.push(C.parseSetText('Local set', 'cat')); S.packs = [C.parsePack('Title: S\nStory:\nWe walk.', 'pk1')];
+  const M = C.mergeStates(B, L, S), m = M.classes[0], pts = id => m.students.find(s => s.id === id)?.points;
+  assert.equal(pts(ann), 5, 'both awards count'); assert.equal(pts(bo), 1);
+  assert.equal(m.students.find(s => s.id === ann).log.map(l => l.r).join(','), 'Local star,Server star');
+  assert.ok(!m.students.some(s => s.id === cy), 'local delete applies');
+  assert.deepEqual(m.students.map(s => s.name).sort(), ['Ann', 'Bo', 'Dee', 'Eve']);
+  assert.deepEqual(m.attendance['2026-11-19'], { [ann]: 'p', [bo]: 'a' });
+  assert.deepEqual(m.posts.map(p => p.id).sort(), ['p1', 'p2']);
+  assert.deepEqual(m.goal, { target: 500, reward: 'Picnic' }, 'server goal kept when not changed here');
+  assert.ok(M.sets.some(s => s.title === 'Local set') && M.packs.length === 1);
+  const again = C.mergeStates(C.normalize(JSON.parse(JSON.stringify(M))), M, M);
+  assert.equal(again.classes[0].students.find(s => s.id === ann).points, 5, 'merging with no changes changes nothing');
+});

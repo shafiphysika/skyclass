@@ -26,6 +26,12 @@ A classroom site with three views: teacher, student and parent.
 - **iPad login** (Classes tab, signed in): turn it on for a class, print the picture PIN cards, and students join with the class code, tap their name and their four pictures. Eight wrong tries lock that child for ten minutes.
 - Story text is the teacher's own content and is stored only in their account, not in this repository.
 
+## Co-teachers, usernames, photos and notes
+
+- **Co-teachers:** under Classes, invite a teacher by email and tick their classes. They sign in with their own confirmed account, open "Shared by …", and can give points, take attendance, write notes and run missions there. They cannot delete classes, change PINs or invite others. When two teachers save at the same moment, both sets of changes are kept.
+- **Usernames:** turning on student sign-in gives every child a username (first name + class number, e.g. ann601) and a 4-picture PIN, printed on a card. It works at school and at home; parents use the same card.
+- **Photos and notes:** the 📝 button on a child's card opens their profile: take or choose a photo, and write notes (great work, kindness, hard work, reminder, class moment) with an optional photo. Children can change their own picture. Photos are shrunk in the browser and stored privately: only the class's teachers and that child's own sign-in can see them.
+
 ## Run it
 
 No build step. Serve the folder and open it:

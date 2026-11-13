@@ -11,7 +11,7 @@ test('ClassGrove copy: names, points, attendance and news match; second run chan
   try {
     const U = '00000000-0000-0000-0000-000000000001', A = '10000000-0000-0000-0000-00000000000a', B = '20000000-0000-0000-0000-00000000000b';
     await db.exec(`create role anon; create role authenticated; create schema auth;
-      create table auth.users(id uuid primary key, email text);
+      create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz);
       create function auth.uid() returns uuid language sql stable as $$select null::uuid$$;
       insert into auth.users values ('${U}', 'Teacher@Example.org');
       create table public.pp_schools(id uuid primary key, name text);
