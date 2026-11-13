@@ -33,7 +33,7 @@ test('co-teachers see only invited classes, usernames sign in, photos and notes 
     // usernames: first name + class number, unique, made by the owner only
     assert.equal(await one("select public.sky_make_usernames('c601')"), 3);
     assert.equal(await one("select public.sky_make_usernames('c601')"), 0, 'only children without one');
-    assert.deepEqual((await q('select username, student_id from public.sky_usernames order by student_id')).map(r => r.username), ['ann601', 'star601', 'ann6012']);
+    assert.deepEqual((await q('select username, student_id from public.sky_usernames order by student_id')).map(r => r.username), ['ann601', '60102', 'ann6012']);
 
     // co-teacher: sees and saves only the invited class
     await as(CO);

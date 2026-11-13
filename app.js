@@ -264,7 +264,7 @@
     if (roster) return `<section class="panel"><div class="bar"><h2 class="h">${esc(roster.name)}: tap your name</h2><button class="pill" data-act="rosterout">Change class</button></div>
       <div class="cards">${roster.students.map(s => `<div class="card"><button class="give" data-act="rosterpick" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span></button></div>`).join('') || '<p class="empty">Nobody in this class has a picture PIN yet.</p>'}</div></section>`;
     const known = knownClasses();
-    return `<form class="panel form" data-form="userlogin"><h2 class="h">Sign in</h2><label>Your username<input name="user" maxlength="20" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="ann601"></label><button class="btn">Next</button>
+    return `<form class="panel form" data-form="userlogin"><h2 class="h">Sign in</h2><label>Your username<input name="user" maxlength="20" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="ann601 or 60107"></label><button class="btn">Next</button>
         <p class="hint wide">Your username and secret pictures are on the card from your teacher. They work at school and at home.</p></form>
       <form class="panel form" data-form="classlogin"><h2 class="h">Or join your class</h2>${known.length ? `<div class="chips wide">${known.map(k => `<button type="button" class="btn" data-act="classpick" data-code="${esc(k.code)}">${esc(k.name)}</button>`).join('')}</div>` : ''}
       <label>Class code from your teacher<input name="code" maxlength="8" autocomplete="off" autocapitalize="characters" required placeholder="ABCD2345"></label><button class="btn">Join</button></form>`;
@@ -876,7 +876,7 @@
       state = C.normalize(state); closeDlg(); toast(`Saved "${p.title}". Press Start for your class when you are ready.`);
     },
     classlogin(f) { openRoster(f.code.value); return false; },
-    userlogin(f) { const u = f.user.value.trim().toLowerCase(); if (!/^[a-z][a-z0-9]{2,19}$/.test(u)) return toast('Check your username on your card.'), false; pinFor = { user: u, name: u }; pinTyped = ''; render(); return false; },
+    userlogin(f) { const u = f.user.value.trim().toLowerCase(); if (!/^[a-z0-9]{3,20}$/.test(u)) return toast('Check your username on your card.'), false; pinFor = { user: u, name: u }; pinTyped = ''; render(); return false; },
     note(f) {
       const c = cls(), sid = profileSid, file = f.photo.files[0], btn = f.querySelector('.btn'); btn.disabled = true;
       (async () => {

@@ -288,12 +288,14 @@ create policy sky_class_logins_write on public.sky_class_logins for all to authe
 
 -- Usernames: each child signs in anywhere with a username and their picture PIN.
 create table if not exists public.sky_usernames (
-  username text primary key check (username ~ '^[a-z][a-z0-9]{2,19}$'),
+  username text primary key check (username ~ '^[a-z0-9]{3,20}$'),
   owner uuid not null references auth.users(id) on delete cascade,
   class_id text not null check (length(class_id) between 1 and 40),
   student_id text not null check (length(student_id) between 1 and 40),
   unique (owner, class_id, student_id)
 );
+alter table public.sky_usernames drop constraint if exists sky_usernames_username_check;
+alter table public.sky_usernames add constraint sky_usernames_username_check check (username ~ '^[a-z0-9]{3,20}$');
 alter table public.sky_usernames enable row level security;
 revoke all on public.sky_usernames from anon, authenticated;
 grant select, delete on public.sky_usernames to authenticated;
@@ -302,22 +304,25 @@ create policy sky_usernames_read on public.sky_usernames for select to authentic
 drop policy if exists sky_usernames_delete on public.sky_usernames;
 create policy sky_usernames_delete on public.sky_usernames for delete to authenticated using (owner = (select auth.uid()));
 
--- Makes usernames like ann601 for children in one of the owner's classes who have none yet.
+-- Makes usernames for children in one of the owner's classes who have none yet: first name + class (ann601),
+-- or, when the name has no Latin letters, class + seat number (60107 for class 601, seat 7).
 create or replace function public.sky_make_usernames(p_class text) returns integer
 language plpgsql security definer set search_path = '' as $$
-declare cls jsonb; st jsonb; base text; num text; cand text; n integer; made integer := 0;
+declare cls jsonb; st jsonb; o bigint; base text; num text; seat text; cand text; n integer; made integer := 0;
 begin
   if auth.uid() is null then raise exception 'SIGN_IN_REQUIRED' using errcode = '28000'; end if;
   select x into cls from public.sky_schools s, jsonb_array_elements(s.state->'classes') x where s.owner = auth.uid() and x->>'id' = p_class;
   if cls is null then return 0; end if;
   num := coalesce(substring(cls->>'name' from '(\d+)\s*$'), substring(cls->>'name' from '\d+'), '');
-  for st in select y from jsonb_array_elements(cls->'students') y loop
+  for st, o in select y, ord from jsonb_array_elements(cls->'students') with ordinality t(y, ord) loop
     continue when exists (select 1 from public.sky_usernames where owner = auth.uid() and class_id = p_class and student_id = st->>'id');
     base := left(lower(regexp_replace(split_part(btrim(st->>'name'), ' ', 1), '[^A-Za-z]', '', 'g')), 10);
-    if length(base) < 2 then base := 'star'; end if;
+    if length(base) >= 2 then base := base || num;
+    else seat := coalesce(substring(st->>'id' from '-(\d+)$'), o::text); base := case when num <> '' then num else 'kid' end || lpad(seat, 2, '0');
+    end if;
     n := 1;
     loop
-      cand := base || num || case when n = 1 then '' else n::text end;
+      cand := left(base, 18) || case when n = 1 then '' else n::text end;
       exit when length(cand) >= 3 and not exists (select 1 from public.sky_usernames where username = cand);
       n := n + 1;
     end loop;
