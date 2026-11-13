@@ -33,7 +33,9 @@ test('co-teachers see only invited classes, usernames sign in, photos and notes 
     // usernames: first name + class number, unique, made by the owner only
     assert.equal(await one("select public.sky_make_usernames('c601')"), 3);
     assert.equal(await one("select public.sky_make_usernames('c601')"), 0, 'only children without one');
-    assert.deepEqual((await q('select username, student_id from public.sky_usernames order by student_id')).map(r => r.username), ['ann601', '60102', 'ann6012']);
+    const names = (await q('select username from public.sky_usernames order by student_id')).map(r => r.username);
+    assert.match(names[0], /^ann601-[a-z2-9]{5}$/); assert.match(names[1], /^60102-[a-z2-9]{5}$/); assert.match(names[2], /^ann601-[a-z2-9]{5}$/);
+    assert.notEqual(names[0], names[2]);
 
     // co-teacher: sees and saves only the invited class
     await as(CO);
@@ -45,10 +47,11 @@ test('co-teachers see only invited classes, usernames sign in, photos and notes 
     edited.classes.push({ id: 'c602', name: 'Hacked', students: [] });
     assert.equal(await one('select public.sky_save_shared($1,$2,$3)', [OWN, edited, loaded.rev]), 2);
     assert.equal(await one('select public.sky_save_shared($1,$2,1)', [OWN, edited]), null, 'stale save refused');
-    assert.equal((await q('select * from public.sky_pins')).length, 2, 'reads PINs of the invited class only');
+    assert.equal((await q('select * from public.sky_pins')).length, 0, 'co-teachers never see PINs');
     await assert.rejects(q("insert into public.sky_pins(owner,class_id,student_id,pin) values ($1,'c601','s3','4444')", [OWN]), /row-level security/, 'cannot change PINs');
     assert.equal((await q('select * from public.sky_usernames')).length, 3);
-    assert.equal((await q('select * from public.sky_codes')).length, 0, 'no codes from the other class');
+    assert.equal((await q('select * from public.sky_codes')).length, 0, 'co-teachers never see family codes');
+    await assert.rejects(q("insert into public.sky_codes(code,owner,class_id,student_id) values ('QQQQQQQQ22',$1,'c601','s1')", [OWN]), /row-level security/);
     await q("insert into public.sky_notes(owner,class_id,student_id,kind,body,photo) values ($1,'c601','s1','kind','Helped a friend',$2)", [OWN, PIC]);
     await assert.rejects(q("insert into public.sky_notes(owner,class_id,student_id,kind,body) values ($1,'c602','t1','star','x')", [OWN]), /row-level security/);
     await q("insert into public.sky_avatars(owner,class_id,student_id,data) values ($1,'c601','s2',$2)", [OWN, PIC]);
@@ -68,16 +71,22 @@ test('co-teachers see only invited classes, usernames sign in, photos and notes 
 
     // children sign in with username + picture PIN; same lockout as before
     await as(null);
-    const k = await one("select public.sky_user_login(' ANN601 ', '1234')"); assert.match(k, /^[A-HJ-NP-Z2-9]{10}$/);
-    assert.equal(await one("select public.sky_user_login('ann601', '9999')"), null);
+    const ann = names[0];
+    const k = await one('select public.sky_user_login($1, $2)', [' ' + ann.toUpperCase() + ' ', '1234']); assert.match(k, /^[A-HJ-NP-Z2-9]{10}$/);
+    assert.equal(await one("select public.sky_user_login('ann601', '1234')"), null, 'the seat or name part alone is not enough');
+    assert.equal(await one('select public.sky_user_login($1, $2)', [ann, '9999']), null);
     assert.equal(await one("select public.sky_user_login('nobody', '1234')"), null, 'unknown user looks like a wrong PIN');
-    for (let i = 0; i < 8; i++) await q("select public.sky_user_login('ann601', '1111')");
-    assert.equal(await one("select public.sky_user_login('ann601', '1234')"), 'LOCKED');
+    for (let i = 0; i < 8; i++) await q('select public.sky_user_login($1, $2)', [ann, '1111']);
+    assert.equal(await one('select public.sky_user_login($1, $2)', [ann, '1234']), 'LOCKED');
+    for (let i = 0; i < 290; i++) await q("select public.sky_user_login('guess' || $1, '1234')", [String(i)]);
+    assert.equal(await one('select public.sky_user_login($1, $2)', [names[1], '5678']), 'BUSY', '300 failures in an hour pause username sign-in for everyone');
+    assert.equal(await one("select public.sky_pin_login('NOPE2345','s2','5678')"), null, 'class-code sign-in is not affected');
+    await db.exec('reset role'); await db.exec('delete from public.sky_login_hour'); await as(null);
     await assert.rejects(q("select public.sky__pin_try($1,'c601','s1','1234')", [OWN]), /permission denied/, 'the PIN check is not callable directly');
 
     // photos and notes: the child's own login sees theirs, nobody else's
     const extra = await one('select public.sky_family_extra($1)', [k]);
-    assert.equal(extra.username, 'ann601'); assert.equal(extra.avatar, null);
+    assert.equal(extra.username, ann); assert.equal(extra.avatar, null);
     assert.equal(extra.notes.length, 1); assert.equal(extra.notes[0].body, 'Helped a friend'); assert.equal(extra.notes[0].photo, true);
     assert.equal(await one('select public.sky_family_note_photo($1,$2)', [k, extra.notes[0].id]), PIC);
     assert.equal(await one('select public.sky_family_note_photo($1,$2)', ['ABCDEFGH23', extra.notes[0].id]), null, 'another child cannot open it');

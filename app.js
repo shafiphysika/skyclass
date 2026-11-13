@@ -264,7 +264,7 @@
     if (roster) return `<section class="panel"><div class="bar"><h2 class="h">${esc(roster.name)}: tap your name</h2><button class="pill" data-act="rosterout">Change class</button></div>
       <div class="cards">${roster.students.map(s => `<div class="card"><button class="give" data-act="rosterpick" data-sid="${esc(s.id)}">${avatar(s)}<span class="nm">${esc(s.name)}</span></button></div>`).join('') || '<p class="empty">Nobody in this class has a picture PIN yet.</p>'}</div></section>`;
     const known = knownClasses();
-    return `<form class="panel form" data-form="userlogin"><h2 class="h">Sign in</h2><label>Your username<input name="user" maxlength="20" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="ann601 or 60107"></label><button class="btn">Next</button>
+    return `<form class="panel form" data-form="userlogin"><h2 class="h">Sign in</h2><label>Your username<input name="user" maxlength="20" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="60107-k7mpq"></label><label class="check wide"><input type="checkbox" name="keep"> Remember me on this device. Only on your own phone or computer at home.</label><button class="btn">Next</button>
         <p class="hint wide">Your username and secret pictures are on the card from your teacher. They work at school and at home.</p></form>
       <form class="panel form" data-form="classlogin"><h2 class="h">Or join your class</h2>${known.length ? `<div class="chips wide">${known.map(k => `<button type="button" class="btn" data-act="classpick" data-code="${esc(k.code)}">${esc(k.name)}</button>`).join('')}</div>` : ''}
       <label>Class code from your teacher<input name="code" maxlength="8" autocomplete="off" autocapitalize="characters" required placeholder="ABCD2345"></label><button class="btn">Join</button></form>`;
@@ -287,7 +287,8 @@
     if (error) { render(); return toast('Could not reach the class. Try again.'); }
     if (data === 'LOCKED') { pinFor = null; render(); return toast('Too many wrong tries. Ask your teacher to unlock you.'); }
     if (!data) { render(); const p = $('.pinshow'); if (p) { p.classList.add('bad'); } return toast('Those pictures are not right. Try again.'); }
-    pinFor = null; await openFamily(data, false, false);
+    if (data === 'BUSY') { pinFor = null; render(); return toast('Too many sign-in tries right now. Try again in an hour, or use the class code at school.'); }
+    pinFor = null; await openFamily(data, false, !!who.keep);
   }
   const isOwner = () => cloud.user && cloud.school === cloud.user.id;
   function ipadHTML(c) {
@@ -414,6 +415,7 @@
     const row = s => { const k = cloud.codes.find(x => x.class_id === c.id && x.student_id === s.id);
       return `<div class="row"><span class="nm">${esc(s.name)}</span>${k ? `<code>${esc(k.code)}</code><button class="pill" data-act="copycode" data-code="${esc(k.code)}">Copy</button>` : ''}<button class="pill" data-act="recode" data-sid="${esc(s.id)}">${k ? 'New code' : 'Make code'}</button></div>`; };
     const schools = cloud.shared.length ? `<div class="chips"><button class="${isOwner() ? 'btn' : 'pill'}" data-act="school" data-owner="${esc(cloud.user.id)}">My classes</button>${cloud.shared.map(s => `<button class="${cloud.school === s.owner ? 'btn' : 'pill'}" data-act="school" data-owner="${esc(s.owner)}">Shared by ${esc(s.teacher)}</button>`).join('')}</div>` : '';
+    if (!isOwner()) c = null; // family codes are the owner's to see and make
     return `<section class="panel"><h3>Signed in as ${esc(cloud.user.email)}</h3><p id="sync">${esc(cloud.status)}</p>${schools}${isOwner() ? '' : '<p class="hint">You are working in classes shared with you. Question sets, missions and class lists are managed by the class owner.</p>'}<button class="pill" data-act="signout">Sign out</button></section>
       ${isOwner() ? coteachHTML() : ''}
       ${c && c.students.length ? `<section class="panel"><h3>Family codes for ${esc(c.name)}</h3><p>A code opens one child's stars, attendance, homework and lessons on any device. At ${esc(location.host + location.pathname)} choose Student or Parent, then enter the code. Treat a code like a password. Making a new code switches the old one off.</p>
@@ -876,7 +878,7 @@
       state = C.normalize(state); closeDlg(); toast(`Saved "${p.title}". Press Start for your class when you are ready.`);
     },
     classlogin(f) { openRoster(f.code.value); return false; },
-    userlogin(f) { const u = f.user.value.trim().toLowerCase(); if (!/^[a-z0-9]{3,20}$/.test(u)) return toast('Check your username on your card.'), false; pinFor = { user: u, name: u }; pinTyped = ''; render(); return false; },
+    userlogin(f) { const u = f.user.value.trim().toLowerCase(); if (!/^[a-z0-9][a-z0-9-]{2,23}$/.test(u)) return toast('Check your username on your card.'), false; pinFor = { user: u, name: u.split('-')[0], keep: f.keep.checked }; pinTyped = ''; render(); return false; },
     note(f) {
       const c = cls(), sid = profileSid, file = f.photo.files[0], btn = f.querySelector('.btn'); btn.disabled = true;
       (async () => {

@@ -268,7 +268,9 @@ end $$;
 
 -- Owner and co-teachers share class records. Picture PINs and class codes stay the owner's to change.
 drop policy if exists sky_codes_own on public.sky_codes;
-create policy sky_codes_own on public.sky_codes for all to authenticated using (public.sky_can(owner, class_id)) with check (public.sky_can(owner, class_id));
+-- Family codes and picture PINs open a child's page, so only the owner can see or make them; removing a co-teacher
+-- then cuts their access at once.
+create policy sky_codes_own on public.sky_codes for all to authenticated using (owner = (select auth.uid())) with check (owner = (select auth.uid()));
 drop policy if exists sky_results_own on public.sky_results;
 create policy sky_results_own on public.sky_results for all to authenticated using (public.sky_can(owner, class_id));
 drop policy if exists sky_checkins_own on public.sky_checkins;
@@ -278,7 +280,6 @@ create policy sky_pin_fails_own on public.sky_pin_fails for all to authenticated
 drop policy if exists sky_pins_own on public.sky_pins;
 drop policy if exists sky_pins_read on public.sky_pins;
 drop policy if exists sky_pins_write on public.sky_pins;
-create policy sky_pins_read on public.sky_pins for select to authenticated using (public.sky_can(owner, class_id));
 create policy sky_pins_write on public.sky_pins for all to authenticated using (owner = (select auth.uid())) with check (owner = (select auth.uid()));
 drop policy if exists sky_class_logins_own on public.sky_class_logins;
 drop policy if exists sky_class_logins_read on public.sky_class_logins;
@@ -288,14 +289,14 @@ create policy sky_class_logins_write on public.sky_class_logins for all to authe
 
 -- Usernames: each child signs in anywhere with a username and their picture PIN.
 create table if not exists public.sky_usernames (
-  username text primary key check (username ~ '^[a-z0-9]{3,20}$'),
+  username text primary key check (username ~ '^[a-z0-9][a-z0-9-]{2,23}$'),
   owner uuid not null references auth.users(id) on delete cascade,
   class_id text not null check (length(class_id) between 1 and 40),
   student_id text not null check (length(student_id) between 1 and 40),
   unique (owner, class_id, student_id)
 );
 alter table public.sky_usernames drop constraint if exists sky_usernames_username_check;
-alter table public.sky_usernames add constraint sky_usernames_username_check check (username ~ '^[a-z0-9]{3,20}$');
+alter table public.sky_usernames add constraint sky_usernames_username_check check (username ~ '^[a-z0-9][a-z0-9-]{2,23}$');
 alter table public.sky_usernames enable row level security;
 revoke all on public.sky_usernames from anon, authenticated;
 grant select, delete on public.sky_usernames to authenticated;
@@ -305,10 +306,11 @@ drop policy if exists sky_usernames_delete on public.sky_usernames;
 create policy sky_usernames_delete on public.sky_usernames for delete to authenticated using (owner = (select auth.uid()));
 
 -- Makes usernames for children in one of the owner's classes who have none yet: first name + class (ann601),
--- or, when the name has no Latin letters, class + seat number (60107 for class 601, seat 7).
+-- or class + seat number when the name has no Latin letters (60107), then a random part (60107-k7mpq).
+-- The random part is what keeps a username from being guessed from a seat number.
 create or replace function public.sky_make_usernames(p_class text) returns integer
 language plpgsql security definer set search_path = '' as $$
-declare cls jsonb; st jsonb; o bigint; base text; num text; seat text; cand text; n integer; made integer := 0;
+declare cls jsonb; st jsonb; o bigint; base text; num text; seat text; cand text; made integer := 0;
 begin
   if auth.uid() is null then raise exception 'SIGN_IN_REQUIRED' using errcode = '28000'; end if;
   select x into cls from public.sky_schools s, jsonb_array_elements(s.state->'classes') x where s.owner = auth.uid() and x->>'id' = p_class;
@@ -320,11 +322,10 @@ begin
     if length(base) >= 2 then base := base || num;
     else seat := coalesce(substring(st->>'id' from '-(\d+)$'), o::text); base := case when num <> '' then num else 'kid' end || lpad(seat, 2, '0');
     end if;
-    n := 1;
     loop
-      cand := left(base, 18) || case when n = 1 then '' else n::text end;
-      exit when length(cand) >= 3 and not exists (select 1 from public.sky_usernames where username = cand);
-      n := n + 1;
+      select left(base, 12) || '-' || string_agg(substr('abcdefghjkmnpqrstuvwxyz23456789', (get_byte(b, i) % 31) + 1, 1), '') into cand
+        from (select uuid_send(gen_random_uuid()) b) r, generate_series(0, 4) i;
+      exit when not exists (select 1 from public.sky_usernames where username = cand);
     end loop;
     insert into public.sky_usernames values (cand, auth.uid(), p_class, st->>'id');
     made := made + 1;
@@ -385,14 +386,25 @@ begin
   if not found then return null; end if;
   return public.sky__pin_try(l.owner, l.class_id, coalesce(p_student, ''), p_pin);
 end $$;
+-- Username sign-in works from anywhere, so on top of each child's own limits there is a school-wide one:
+-- after 300 failed username sign-ins in an hour, username sign-in pauses until the hour is over ('BUSY').
 -- Unknown usernames and wrong PINs give the same answer, so usernames cannot be fished for.
+create table if not exists public.sky_login_hour (hour timestamptz primary key, fails integer not null default 0);
+alter table public.sky_login_hour enable row level security;
+revoke all on public.sky_login_hour from anon, authenticated;
 create or replace function public.sky_user_login(p_user text, p_pin text) returns text
 language plpgsql security definer set search_path = '' as $$
-declare u public.sky_usernames;
+declare u public.sky_usernames; h timestamptz := date_trunc('hour', now()); k text;
 begin
+  perform pg_advisory_xact_lock(hashtextextended('sky_user_login', 0));
+  if coalesce((select fails from public.sky_login_hour where hour = h), 0) >= 300 then return 'BUSY'; end if;
   select * into u from public.sky_usernames where username = lower(btrim(coalesce(p_user, '')));
-  if not found then return null; end if;
-  return public.sky__pin_try(u.owner, u.class_id, u.student_id, p_pin);
+  if found then k := public.sky__pin_try(u.owner, u.class_id, u.student_id, p_pin); end if;
+  if k is null then
+    insert into public.sky_login_hour values (h, 1) on conflict (hour) do update set fails = public.sky_login_hour.fails + 1;
+    delete from public.sky_login_hour where hour < h - interval '1 day';
+  end if;
+  return k;
 end $$;
 
 -- Profile photos and behaviour notes. Private: the class's teachers and the child's own login only.
